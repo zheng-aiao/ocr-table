@@ -1,0 +1,1393 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>执行详情</title>
+  <style>
+    :root {
+      --bg: #0e151c;
+      --panel: #162028;
+      --text: #e8eef4;
+      --muted: #8a9aab;
+      --line: #2a3846;
+      --accent: #2f7fd1;
+      --ok: #2fad6e;
+      --err: #d45b63;
+      --warn: #c9a227;
+      --empty: #3a4652;
+      --page-width: 1920px;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+      background:
+        radial-gradient(900px 420px at 100% 0%, #1a2c3d 0%, transparent 55%),
+        var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+    }
+    .page {
+      width: min(98vw - 16px, var(--page-width));
+      margin: 0 auto;
+      padding: 24px 0 40px;
+    }
+    header { margin-bottom: 8px; }
+    header a { color: var(--accent); text-decoration: none; font-size: 0.9rem; }
+    header h1 { margin: 10px 0 6px; font-size: 1.35rem; }
+    header .sub { color: var(--muted); font-size: 0.9rem; }
+    main {
+      width: 100%;
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+      min-width: 0;
+    }
+    .summary,
+    .card {
+      width: 100%;
+      min-width: 0;
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      padding: 14px 16px;
+    }
+    .summary {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px 18px;
+      font-size: 0.9rem;
+    }
+    .badge {
+      display: inline-block;
+      padding: 3px 10px;
+      border-radius: 999px;
+      font-size: 0.78rem;
+      font-weight: 650;
+    }
+    .badge.ok { background: rgba(47,173,110,0.18); color: var(--ok); }
+    .badge.fail { background: rgba(212,91,99,0.18); color: var(--err); }
+    .badge.partial { background: rgba(201,162,39,0.18); color: var(--warn); }
+    .card h2 {
+      margin: 0 0 12px;
+      font-size: 1.02rem;
+      font-weight: 650;
+    }
+    .card h3 {
+      margin: 0 0 10px;
+      font-size: 0.95rem;
+      font-weight: 650;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+    .imgs {
+      display: grid;
+      grid-template-columns: 1fr;
+      gap: 12px;
+      min-width: 0;
+    }
+    .imgs.hero img,
+    .img-card.hero img {
+      max-height: 420px;
+    }
+    .img-card {
+      background: #0b1116;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      overflow: hidden;
+      min-width: 0;
+    }
+    .img-card button.preview-btn {
+      display: block;
+      width: 100%;
+      padding: 0;
+      margin: 0;
+      border: 0;
+      background: transparent;
+      cursor: zoom-in;
+    }
+    .img-card img {
+      display: block;
+      width: 100%;
+      max-height: 280px;
+      object-fit: contain;
+      background: #0b1116;
+      transition: opacity 0.15s ease;
+    }
+    .img-card button.preview-btn:hover img {
+      opacity: 0.88;
+    }
+    .img-card .cap {
+      padding: 8px 10px;
+      font-size: 0.8rem;
+      color: var(--muted);
+    }
+    .links {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px 14px;
+      align-items: center;
+    }
+    .links a,
+    .links button.copy-path {
+      color: var(--accent);
+      font-size: 0.88rem;
+      background: none;
+      border: 0;
+      padding: 0;
+      cursor: pointer;
+      font-family: inherit;
+      text-decoration: none;
+    }
+    .links button.copy-path:hover { text-decoration: underline; }
+    .links button.copy-path.copied { color: var(--ok); }
+    .table-wrap {
+      overflow: auto;
+      max-height: 360px;
+      max-width: 100%;
+      min-width: 0;
+      margin-top: 10px;
+    }
+    table {
+      border-collapse: collapse;
+      font-size: 0.78rem;
+      width: max-content;
+      min-width: 100%;
+    }
+    th, td {
+      border: 1px solid var(--line);
+      padding: 4px 6px;
+      white-space: nowrap;
+      text-align: center;
+    }
+    th { background: #1b2833; position: sticky; top: 0; }
+    td.empty { background: rgba(212,91,99,0.12); color: var(--empty); }
+    td.gap-filled {
+      background: rgba(201,162,39,0.18);
+      color: #e8c547;
+      cursor: help;
+      box-shadow: inset 0 0 0 1px rgba(201,162,39,0.4);
+      position: relative;
+    }
+    td.gap-filled::after {
+      content: '补';
+      position: absolute;
+      top: 0;
+      right: 1px;
+      font-size: 0.58rem;
+      line-height: 1;
+      opacity: 0.85;
+      color: #c9a227;
+      pointer-events: none;
+    }
+    td.gap-filled:hover {
+      background: rgba(201,162,39,0.3);
+    }
+    .gap-legend {
+      margin: 8px 0 0;
+      color: var(--muted);
+      font-size: 0.78rem;
+      line-height: 1.4;
+    }
+    .gap-legend .swatch {
+      display: inline-block;
+      width: 0.7em;
+      height: 0.7em;
+      margin-right: 4px;
+      vertical-align: -1px;
+      border-radius: 2px;
+      background: rgba(201,162,39,0.35);
+      box-shadow: inset 0 0 0 1px rgba(201,162,39,0.5);
+    }
+    details { margin-top: 12px; }
+    details summary {
+      cursor: pointer;
+      color: var(--muted);
+      font-size: 0.88rem;
+      margin-bottom: 8px;
+      user-select: none;
+    }
+    .cand-grid {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 8px;
+      margin-top: 8px;
+    }
+    .sub-card {
+      background: #121a22;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      padding: 12px 14px;
+      min-width: 0;
+    }
+    .sub-card + .sub-card {
+      margin-top: 0;
+    }
+    .date-result {
+      margin: 0 0 12px;
+      padding: 10px 12px;
+      border-radius: 8px;
+      background: #0b1116;
+      border: 1px solid var(--line);
+      font-size: 0.9rem;
+      line-height: 1.5;
+    }
+    .date-result .date-value {
+      font-size: 1.25rem;
+      font-weight: 700;
+      letter-spacing: 0.02em;
+      color: var(--text);
+    }
+    .date-result .date-meta {
+      color: var(--muted);
+      font-size: 0.82rem;
+      margin-top: 4px;
+    }
+    .date-steps-wrap {
+      margin-top: 12px;
+      min-width: 0;
+    }
+    .date-steps-title {
+      font-size: 0.88rem;
+      color: var(--muted);
+      margin-bottom: 6px;
+    }
+    .date-stage-fold {
+      border: 1px solid rgba(255,255,255,0.08);
+      border-radius: 8px;
+      margin-top: 8px;
+      padding: 0 10px 10px;
+      background: rgba(0,0,0,0.15);
+      min-width: 0;
+      overflow: hidden;
+    }
+    .date-stage-fold > summary {
+      cursor: pointer;
+      padding: 10px 0;
+      font-size: 0.92rem;
+      font-weight: 600;
+      list-style: none;
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 8px;
+    }
+    .date-stage-fold > summary::-webkit-details-marker { display: none; }
+    .date-stage-fold > summary::before {
+      content: '▸ ';
+      color: var(--muted);
+      font-weight: 400;
+    }
+    .date-stage-fold[open] > summary::before { content: '▾ '; }
+    .date-stage-hint {
+      width: 100%;
+      font-size: 0.78rem;
+      font-weight: 400;
+      color: var(--muted);
+      margin: -4px 0 4px 1.1em;
+    }
+    .date-stage-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+      gap: 10px;
+      margin-top: 4px;
+      min-width: 0;
+    }
+    .date-stage-item {
+      min-width: 0;
+      max-width: 100%;
+      border: 1px solid rgba(255,255,255,0.06);
+      border-radius: 8px;
+      padding: 6px;
+      background: rgba(0,0,0,0.12);
+      overflow: hidden;
+    }
+    .date-stage-item.winner {
+      border-color: rgba(47,173,110,0.45);
+    }
+    .date-stage-item .item-label {
+      font-size: 0.82rem;
+      margin-bottom: 4px;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      flex-wrap: wrap;
+    }
+    .date-stage-item button.preview-btn {
+      display: block;
+      width: 100%;
+      max-width: 100%;
+      padding: 0;
+      margin: 0;
+      border: 0;
+      background: transparent;
+      cursor: zoom-in;
+      overflow: hidden;
+    }
+    .date-stage-item img {
+      display: block;
+      width: 100%;
+      max-width: 100%;
+      height: auto;
+      max-height: 96px;
+      object-fit: contain;
+      background: #0b1116;
+      border-radius: 4px;
+    }
+    .date-step-hint {
+      margin-top: 4px;
+      font-size: 0.78rem;
+      color: var(--muted);
+      line-height: 1.35;
+    }
+    .date-step-file {
+      margin-top: 2px;
+      font-size: 0.72rem;
+      color: var(--muted);
+      opacity: 0.8;
+      word-break: break-all;
+    }
+    .date-step-fold {
+      border: 1px solid rgba(255,255,255,0.08);
+      border-radius: 8px;
+      margin-top: 6px;
+      padding: 0 10px 8px;
+      background: rgba(0,0,0,0.15);
+    }
+    .date-step-fold > summary {
+      cursor: pointer;
+      padding: 8px 0;
+      font-size: 0.9rem;
+      list-style: none;
+    }
+    .date-step-fold > summary::-webkit-details-marker { display: none; }
+    .date-step-fold > summary::before {
+      content: '▸ ';
+      color: var(--muted);
+    }
+    .date-step-fold[open] > summary::before { content: '▾ '; }
+    .cand-card {
+      background: #0b1116;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      overflow: hidden;
+      min-width: 0;
+    }
+    .cand-card.winner { border-color: rgba(47,173,110,0.55); }
+    .cand-card.loser { border-color: var(--line); }
+    .cand-card.invalid, .cand-card.skipped { opacity: 0.78; }
+    .cand-card button.preview-btn {
+      display: block;
+      width: 100%;
+      padding: 0;
+      margin: 0;
+      border: 0;
+      background: transparent;
+      cursor: zoom-in;
+    }
+    .cand-card img {
+      display: block;
+      width: 100%;
+      max-height: 110px;
+      object-fit: contain;
+      background: #0b1116;
+    }
+    .cand-card .meta {
+      padding: 6px 8px 8px;
+      font-size: 0.72rem;
+      color: var(--muted);
+      line-height: 1.35;
+    }
+    .cand-card .meta .title {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      flex-wrap: wrap;
+      color: var(--text);
+      font-weight: 600;
+    }
+    .badge.winner { background: rgba(47,173,110,0.18); color: var(--ok); }
+    .badge.loser { background: rgba(138,154,171,0.16); color: var(--muted); }
+    .badge.invalid { background: rgba(212,91,99,0.16); color: var(--err); }
+    .badge.skipped { background: rgba(201,162,39,0.14); color: var(--warn); }
+    .err { color: var(--err); padding: 40px; text-align: center; }
+    .side-grid {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+      gap: 14px;
+      width: 100%;
+      min-width: 0;
+      align-items: start;
+    }
+    .side-col {
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      min-width: 0;
+    }
+    .side-col > .card,
+    .side-col > .sub-card {
+      width: 100%;
+    }
+    .side-title {
+      margin: 0;
+      font-size: 1.02rem;
+      font-weight: 650;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+    .side-title .muted {
+      color: var(--muted);
+      font-size: 0.86rem;
+      font-weight: 500;
+    }
+    @media (max-width: 1100px) {
+      .cand-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    }
+    @media (max-width: 960px) {
+      .side-grid { grid-template-columns: 1fr; }
+    }
+    /* 大屏预览：有 OCR 表时左右对照，图片尽量占满左侧 */
+    .lightbox {
+      position: fixed;
+      inset: 0;
+      z-index: 1000;
+      display: none;
+      align-items: stretch;
+      justify-content: center;
+      background: rgba(4, 8, 12, 0.92);
+      padding: 10px 12px;
+      cursor: zoom-out;
+    }
+    .lightbox.open { display: flex; }
+    .lightbox-inner {
+      position: relative;
+      width: min(99vw, 1920px);
+      max-height: 98vh;
+      overflow: hidden;
+      cursor: default;
+      background: #121a22;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      padding: 16px 18px 14px;
+      margin: auto;
+      box-shadow: 0 16px 56px rgba(0,0,0,0.5);
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      min-height: 0;
+    }
+    .lightbox-inner.with-table {
+      display: grid;
+      grid-template-columns: minmax(0, 1.1fr) minmax(520px, 1fr);
+      /* 右栏：标题 + 本候选/胜出者(共 2fr) + 竞选对比(1fr) → 三块内容等高 */
+      grid-template-rows: auto minmax(0, 2fr) minmax(0, 1fr);
+      gap: 8px 16px;
+      align-items: stretch;
+      min-height: min(98vh, 920px);
+    }
+    .lightbox-inner img {
+      display: block;
+      width: 100%;
+      max-width: 100%;
+      max-height: 88vh;
+      margin: 0 auto;
+      object-fit: contain;
+      border-radius: 8px;
+      background: #0b1116;
+    }
+    .lightbox-inner.with-table img {
+      grid-column: 1;
+      grid-row: 1 / span 3;
+      width: 100%;
+      height: 100%;
+      max-height: calc(98vh - 32px);
+      object-fit: contain;
+      align-self: center;
+      justify-self: center;
+    }
+    .lightbox-inner.img-only img {
+      width: auto;
+      max-height: 90vh;
+    }
+    .lightbox-cap {
+      margin: 0;
+      text-align: center;
+      color: #c5d0db;
+      font-size: 1rem;
+    }
+    .lightbox-inner.with-table .lightbox-cap {
+      grid-column: 2;
+      grid-row: 1;
+      text-align: left;
+      padding-right: 44px;
+    }
+    .lightbox-table {
+      display: none;
+      min-height: 0;
+    }
+    .lightbox-table.show {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      min-height: 0;
+      overflow: hidden;
+    }
+    .lightbox-inner.with-table .lightbox-table.show {
+      grid-column: 2;
+      grid-row: 2;
+    }
+    .lightbox-table .ocr-pane {
+      display: flex;
+      flex-direction: column;
+      flex: 1 1 0;
+      min-width: 0;
+      min-height: 0;
+      background: #0b1116;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 8px;
+    }
+    .lightbox-table .ocr-pane.highlight-sel {
+      border-color: rgba(47, 127, 209, 0.65);
+    }
+    .lightbox-table .ocr-pane.highlight-win {
+      border-color: rgba(47, 173, 110, 0.65);
+    }
+    .lightbox-table .ocr-pane h3 {
+      margin: 0 0 8px;
+      font-size: 0.88rem;
+      flex: 0 0 auto;
+      color: var(--text);
+    }
+    .lightbox-table .ocr-pane .pane-sub {
+      color: var(--muted);
+      font-weight: 400;
+      font-size: 0.78rem;
+    }
+    .lightbox-table .table-wrap {
+      flex: 1 1 auto;
+      max-height: none;
+      min-height: 0;
+      overflow: auto;
+    }
+    .lightbox-table table {
+      font-size: 0.78rem;
+    }
+    .lightbox-table th, .lightbox-table td {
+      padding: 4px 6px;
+    }
+    .lightbox-compare {
+      display: none;
+      min-height: 0;
+      overflow: auto;
+    }
+    .lightbox-compare.show {
+      display: flex;
+      flex-direction: column;
+      grid-column: 2;
+      grid-row: 3;
+      min-height: 0;
+      overflow: auto;
+      background: #0b1116;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 8px;
+    }
+    .lightbox-compare h3 {
+      margin: 0 0 8px;
+      font-size: 0.92rem;
+    }
+    .lightbox-compare .compare-note {
+      margin: 0;
+      color: var(--muted);
+      font-size: 0.85rem;
+    }
+    .lightbox-compare table.compare-all {
+      width: 100%;
+      min-width: 0;
+      font-size: 0.8rem;
+    }
+    .lightbox-compare table.compare-all th,
+    .lightbox-compare table.compare-all td {
+      padding: 5px 8px;
+      text-align: left;
+      white-space: nowrap;
+    }
+    .lightbox-compare .compare-legend {
+      margin: 10px 0 0;
+      padding: 0;
+      list-style: none;
+      color: var(--muted);
+      font-size: 0.75rem;
+      line-height: 1.55;
+    }
+    .lightbox-compare .compare-legend li {
+      margin: 0;
+    }
+    .lightbox-compare tr.row-selected td {
+      background: rgba(47, 127, 209, 0.14);
+    }
+    .lightbox-compare tr.row-winner td {
+      background: rgba(47, 173, 110, 0.12);
+    }
+    .lightbox-compare tr.row-selected.row-winner td {
+      background: rgba(47, 173, 110, 0.22);
+    }
+    .lightbox-compare .tag-sel,
+    .lightbox-compare .tag-win {
+      display: inline-block;
+      margin-left: 6px;
+      padding: 1px 6px;
+      border-radius: 999px;
+      font-size: 0.7rem;
+      font-weight: 650;
+    }
+    .lightbox-compare .tag-sel {
+      background: rgba(47, 127, 209, 0.2);
+      color: #7eb6e8;
+    }
+    .lightbox-compare .tag-win {
+      background: rgba(47, 173, 110, 0.2);
+      color: var(--ok);
+    }
+    .lightbox-compare .cmp-weak { color: var(--err); }
+    .lightbox-compare .cmp-win { color: var(--ok); }
+    .lightbox-compare .cmp-tie { color: var(--muted); }
+    .lightbox-close {
+      position: absolute;
+      top: 10px;
+      right: 10px;
+      width: 40px;
+      height: 40px;
+      border: 0;
+      border-radius: 50%;
+      background: #1e2c38;
+      color: #fff;
+      font-size: 1.3rem;
+      line-height: 1;
+      cursor: pointer;
+      box-shadow: 0 2px 10px rgba(0,0,0,0.35);
+      z-index: 2;
+    }
+    .lightbox-close:hover { background: var(--accent); }
+    @media (max-width: 1100px) {
+      .lightbox-inner.with-table {
+        display: flex;
+        flex-direction: column;
+        overflow: auto;
+        min-height: 0;
+      }
+      .lightbox-inner.with-table img {
+        height: auto;
+        max-height: 40vh;
+      }
+      .lightbox-inner.with-table .lightbox-cap {
+        text-align: center;
+        padding-right: 0;
+      }
+      .lightbox-table.show {
+        max-height: none;
+      }
+      .lightbox-table .ocr-pane {
+        flex: 0 0 auto;
+        max-height: 28vh;
+      }
+      .lightbox-compare.show {
+        max-height: 28vh;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="page">
+  <header>
+    <a href="/">← 返回履历</a>
+    <h1 id="title">执行详情</h1>
+    <div class="sub" id="sub"></div>
+  </header>
+  <main id="main">
+    <div class="err">加载中…</div>
+  </main>
+  </div>
+  <div class="lightbox" id="lightbox" role="dialog" aria-modal="true" aria-label="预览">
+    <div class="lightbox-inner img-only" id="lightboxInner">
+      <button type="button" class="lightbox-close" id="lightboxClose" aria-label="关闭">×</button>
+      <img id="lightboxImg" alt="预览" />
+      <div class="lightbox-cap" id="lightboxCap"></div>
+      <div class="lightbox-table" id="lightboxTable"></div>
+      <div class="lightbox-compare" id="lightboxCompare"></div>
+    </div>
+  </div>
+  <script>
+    const runId = decodeURIComponent(location.pathname.split('/').pop() || '');
+    const candStore = {};
+    /** 各侧最终结果表（胜出者 + 空格补录），供候选弹窗对照 */
+    const sideFinalStore = {};
+
+    function badgeHtml(run) {
+      if (run.mode === 'dual') {
+        if (run.left_ok && run.right_ok) return '<span class="badge ok">成功</span>';
+        if (run.left_ok || run.right_ok) return '<span class="badge partial">部分成功</span>';
+        return '<span class="badge fail">失败</span>';
+      }
+      return run.ok
+        ? '<span class="badge ok">成功</span>'
+        : '<span class="badge fail">失败</span>';
+    }
+
+    function triggerLabel(t) {
+      return ({ schedule: '定时', manual: '手动', debug: '联调' })[t] || t || '-';
+    }
+
+    function statusBadge(status) {
+      const map = {
+        winner: ['winner', '胜出'],
+        loser: ['loser', '落选'],
+        invalid: ['invalid', '无效'],
+        skipped: ['skipped', '跳过'],
+      };
+      const [cls, text] = map[status] || ['loser', status || '—'];
+      return `<span class="badge ${cls}">${text}</span>`;
+    }
+
+    function candFileName(c) {
+      if (!c) return 'cand_unknown';
+      if (c.name) return String(c.name);
+      const lab = String(c.label || '').trim();
+      if (!lab) return `cand_${String(c.index).padStart(2, '0')}`;
+      // 兼容旧 label：auto → table_auto
+      const normalized = lab === 'auto' ? 'table_auto' : lab;
+      return normalized.startsWith('cand_') ? normalized : `cand_${normalized}`;
+    }
+
+    function findWinnerCand(storePrefix) {
+      const prefix = `${storePrefix}_`;
+      for (const key of Object.keys(candStore)) {
+        if (!key.startsWith(prefix)) continue;
+        const c = candStore[key];
+        if (c && c.status === 'winner') return c;
+      }
+      return null;
+    }
+
+    function listSideCands(storePrefix) {
+      const prefix = `${storePrefix}_`;
+      return Object.keys(candStore)
+        .filter((k) => k.startsWith(prefix))
+        .map((k) => candStore[k])
+        .sort((a, b) => (a.index || 0) - (b.index || 0));
+    }
+
+    /** score v3=[表头质量,实心行,密度,面积]；v2=[表区优先,…]；v1=[表头质量,列数,…] */
+    function scoreDimDefs(score) {
+      if (score && score.length === 4) {
+        return [
+          { name: '表头质量', fmt: (v) => (v == null ? '—' : String(v)) },
+          { name: '实心行数', fmt: (v) => (v == null ? '—' : String(v)) },
+          { name: '填格密度', fmt: (v) => (v == null ? '—' : `${v}%`) },
+        ];
+      }
+      const s0 = score && score[0];
+      const isV2 = score && score.length >= 5 && (s0 === 0 || s0 === 1);
+      if (isV2) {
+        return [
+          { name: '表区优先', fmt: (v) => (v === 1 ? '是' : v === 0 ? '否' : String(v ?? '—')) },
+          { name: '表头质量', fmt: (v) => (v == null ? '—' : String(v)) },
+          { name: '实心行数', fmt: (v) => (v == null ? '—' : String(v)) },
+          { name: '填格密度', fmt: (v) => (v == null ? '—' : `${v}%`) },
+        ];
+      }
+      return [
+        { name: '表头质量', fmt: (v) => (v == null ? '—' : String(v)) },
+        { name: '列数', fmt: (v) => (v == null ? '—' : String(v)) },
+        { name: '实心行数', fmt: (v) => (v == null ? '—' : String(v)) },
+        { name: '填格密度', fmt: (v) => (v == null ? '—' : `${v}%`) },
+      ];
+    }
+
+    function numOrNull(v) {
+      if (v == null || v === '') return null;
+      const n = Number(v);
+      return Number.isFinite(n) ? n : null;
+    }
+
+    function statusLabel(status) {
+      return ({ winner: '胜出', loser: '落选', invalid: '无效', skipped: '跳过' })[status] || status || '—';
+    }
+
+    function escapeHtml(s) {
+      return String(s == null ? '' : s)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;');
+    }
+
+    function renderOcrPane(title, sub, headers, rows, extraClass, gapFillMap, rowTags) {
+      const cls = extraClass ? ` ${extraClass}` : '';
+      const body = (headers && headers.length)
+        ? renderTable(headers, rows || [], rowTags, gapFillMap)
+        : '<p class="compare-note">无识别表格</p>';
+      return `<div class="ocr-pane${cls}">
+        <h3>${escapeHtml(title)}${sub ? ` <span class="pane-sub">${escapeHtml(sub)}</span>` : ''}</h3>
+        ${body}
+      </div>`;
+    }
+
+    /** 右栏上中：最终结果（胜出+补录）、本候选 OCR */
+    function renderDualOcrTables(selected, finalSide) {
+      const selName = candFileName(selected);
+      const final = finalSide || {};
+      const gapN = Number(final.gap_filled || 0) || 0;
+      const finalSub = gapN > 0
+        ? `胜出表 + 补录 ${gapN} 格`
+        : '胜出表（无补录）';
+      let html = renderOcrPane(
+        '最终结果',
+        finalSub,
+        final.headers || [],
+        final.rows || [],
+        'highlight-win',
+        final.gap_fill_map || [],
+        final.row_tags || []
+      );
+      html += renderOcrPane(
+        '本候选',
+        selName + (selected.status === 'winner' ? ' · 胜出原表' : ''),
+        selected.headers,
+        selected.rows,
+        'highlight-sel'
+      );
+      return html;
+    }
+
+    /**
+     * 右栏下区：全部候选四维分数；突出「本候选 / 胜出」。
+     */
+    function renderScoreCompareAll(cands, selected, winner) {
+      if (!cands || !cands.length) {
+        return '<p class="compare-note">无候选数据</p>';
+      }
+      const sample = (winner && winner.score) || (selected && selected.score)
+        || (cands.find((c) => c.score && c.score.length) || {}).score
+        || [];
+      const dims = scoreDimDefs(sample);
+      let html = '<h3>竞选对比（全部候选）</h3>';
+      html += '<table class="compare-all"><thead><tr>'
+        + '<th>候选</th><th>状态</th>';
+      for (const d of dims) html += `<th>${d.name}</th>`;
+      html += '<th>面积</th></tr></thead><tbody>';
+
+      for (const c of cands) {
+        const isSel = selected && c.index === selected.index;
+        const isWin = winner && c.index === winner.index;
+        const rowCls = [
+          isSel ? 'row-selected' : '',
+          isWin ? 'row-winner' : '',
+        ].filter(Boolean).join(' ');
+        const tags = (isSel ? '<span class="tag-sel">所选</span>' : '')
+          + (isWin ? '<span class="tag-win">胜出</span>' : '');
+        const score = c.score || [];
+        html += `<tr class="${rowCls}">`;
+        html += `<td>${candFileName(c)}${tags}</td>`;
+        html += `<td>${statusLabel(c.status)}</td>`;
+        if (!score.length || c.status === 'skipped' || c.status === 'invalid') {
+          for (let i = 0; i < dims.length; i++) html += '<td>—</td>';
+          html += '<td>—</td>';
+        } else {
+          for (let i = 0; i < dims.length; i++) {
+            html += `<td>${dims[i].fmt(score[i])}</td>`;
+          }
+          html += `<td>${score[4] != null ? score[4] : '—'}</td>`;
+        }
+        html += '</tr>';
+      }
+      html += '</tbody></table>';
+      html += '<ul class="compare-legend">'
+        + '<li><b>表头质量</b>：合法时刻列数 − 100×坏跳（邻列差≠15分钟）− 50×非法时刻 − 80×倒退（后列时刻早于前列）；越高越好。</li>'
+        + '<li><b>实心行数</b>：非空格数 ≥ max(6, 列数÷3) 的数据行条数；越高越好。</li>'
+        + '<li><b>填格密度</b>：非空格数 ÷ (行数×列数) ×100%；越高越好。</li>'
+        + '</ul>';
+      return html;
+    }
+
+    function escapeAttr(s) {
+      return String(s || '')
+        .replace(/&/g, '&amp;')
+        .replace(/"/g, '&quot;')
+        .replace(/</g, '&lt;');
+    }
+
+    function copyPathBtn(path, label) {
+      if (!path) return '';
+      const text = label || '复制图片路径';
+      return `<button type="button" class="copy-path" data-copy-path="${escapeAttr(path)}" title="${escapeAttr(path)}">${text}</button>`;
+    }
+
+    async function copyText(text) {
+      try {
+        if (navigator.clipboard && window.isSecureContext) {
+          await navigator.clipboard.writeText(text);
+          return true;
+        }
+      } catch (_) { /* fallback below */ }
+      const ta = document.createElement('textarea');
+      ta.value = text;
+      ta.style.cssText = 'position:fixed;left:-9999px;top:0';
+      document.body.appendChild(ta);
+      ta.select();
+      let ok = false;
+      try { ok = document.execCommand('copy'); } catch (_) { ok = false; }
+      document.body.removeChild(ta);
+      return ok;
+    }
+
+    function imgCard(url, cap) {
+      if (!url) return '';
+      const safeCap = String(cap || '').replace(/"/g, '&quot;');
+      const safeUrl = String(url).replace(/"/g, '&quot;');
+      return `<div class="img-card">
+        <button type="button" class="preview-btn" data-preview-src="${safeUrl}" data-preview-cap="${safeCap}" title="点击大屏预览">
+          <img src="${safeUrl}" alt="${safeCap}" loading="lazy" />
+        </button>
+        <div class="cap">${cap}</div>
+      </div>`;
+    }
+
+    function openPreview(src, cap, opts) {
+      opts = opts || {};
+      const box = document.getElementById('lightbox');
+      const inner = document.getElementById('lightboxInner');
+      const img = document.getElementById('lightboxImg');
+      const label = document.getElementById('lightboxCap');
+      const tableEl = document.getElementById('lightboxTable');
+      const compareEl = document.getElementById('lightboxCompare');
+      if (src) {
+        img.style.display = '';
+        img.src = src;
+        img.alt = cap || '预览';
+      } else {
+        img.removeAttribute('src');
+        img.style.display = 'none';
+      }
+      label.textContent = cap || '';
+      const hasTables = !!opts.tablesHtml;
+      const hasCompare = !!opts.compareHtml;
+      if (hasTables) {
+        tableEl.innerHTML = opts.tablesHtml;
+        tableEl.classList.add('show');
+      } else if (opts.headers && opts.headers.length) {
+        tableEl.innerHTML = renderOcrPane('OCR 识别表', '', opts.headers, opts.rows || [], '');
+        tableEl.classList.add('show');
+      } else {
+        tableEl.innerHTML = '';
+        tableEl.classList.remove('show');
+      }
+      if (hasCompare) {
+        compareEl.innerHTML = opts.compareHtml;
+        compareEl.classList.add('show');
+      } else {
+        compareEl.innerHTML = '';
+        compareEl.classList.remove('show');
+      }
+      if (hasTables || hasCompare || (opts.headers && opts.headers.length)) {
+        inner.classList.remove('img-only');
+        inner.classList.add('with-table');
+      } else {
+        inner.classList.remove('with-table');
+        inner.classList.add('img-only');
+      }
+      box.classList.add('open');
+      document.body.style.overflow = 'hidden';
+    }
+
+    function closePreview() {
+      const box = document.getElementById('lightbox');
+      box.classList.remove('open');
+      document.getElementById('lightboxImg').removeAttribute('src');
+      document.getElementById('lightboxImg').style.display = '';
+      document.getElementById('lightboxTable').innerHTML = '';
+      document.getElementById('lightboxTable').classList.remove('show');
+      document.getElementById('lightboxCompare').innerHTML = '';
+      document.getElementById('lightboxCompare').classList.remove('show');
+      const inner = document.getElementById('lightboxInner');
+      inner.classList.remove('with-table');
+      inner.classList.add('img-only');
+      document.body.style.overflow = '';
+    }
+
+    function bindPreview(root) {
+      root.querySelectorAll('[data-preview-src]').forEach((btn) => {
+        btn.addEventListener('click', (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          openPreview(btn.getAttribute('data-preview-src'), btn.getAttribute('data-preview-cap') || '');
+        });
+      });
+      root.querySelectorAll('[data-cand-key]').forEach((btn) => {
+        btn.addEventListener('click', (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          const key = btn.getAttribute('data-cand-key');
+          const prefix = btn.getAttribute('data-cand-prefix') || '';
+          const c = candStore[key];
+          if (!c) return;
+          const title = `${statusLabel(c.status)} · ${candFileName(c)}`;
+          const winner = findWinnerCand(prefix);
+          const all = listSideCands(prefix);
+          const finalSide = sideFinalStore[prefix] || {};
+          openPreview(c.image_url || '', title, {
+            tablesHtml: renderDualOcrTables(c, finalSide),
+            compareHtml: renderScoreCompareAll(all, c, winner),
+          });
+        });
+      });
+      root.querySelectorAll('[data-copy-path]').forEach((btn) => {
+        btn.addEventListener('click', async (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          const path = btn.getAttribute('data-copy-path') || '';
+          if (!path) return;
+          const ok = await copyText(path);
+          const prev = btn.textContent;
+          btn.textContent = ok ? '已复制' : '复制失败';
+          btn.classList.toggle('copied', ok);
+          setTimeout(() => {
+            btn.textContent = prev;
+            btn.classList.remove('copied');
+          }, 1500);
+        });
+      });
+    }
+
+    document.getElementById('lightboxClose').addEventListener('click', (e) => {
+      e.stopPropagation();
+      closePreview();
+    });
+    document.getElementById('lightbox').addEventListener('click', (e) => {
+      if (e.target.id === 'lightbox') closePreview();
+    });
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') closePreview();
+    });
+
+    function renderTable(headers, rows, rowTags, gapFillMap) {
+      if (!headers || !headers.length) {
+        return '<p style="color:var(--muted);font-size:0.88rem;margin:10px 0 0;">无识别表格</p>';
+      }
+      const labels = rowTags && rowTags.length ? rowTags : rows.map((_, i) => `行${i + 1}`);
+      const gapMap = Array.isArray(gapFillMap) ? gapFillMap : [];
+      let html = '<div class="table-wrap"><table><thead><tr><th>指标</th>';
+      for (const h of headers) html += `<th>${escapeHtml(h)}</th>`;
+      html += '</tr></thead><tbody>';
+      rows.forEach((row, i) => {
+        html += `<tr><th>${escapeHtml(labels[i] || i + 1)}</th>`;
+        const gapRow = gapMap[i] || [];
+        for (let j = 0; j < headers.length; j++) {
+          const v = row[j] == null ? '' : String(row[j]).trim();
+          const src = gapRow[j] == null ? '' : String(gapRow[j]).trim();
+          if (!v) {
+            html += '<td class="empty">空</td>';
+          } else if (src) {
+            html += `<td class="gap-filled" title="${escapeAttr('补录自 ' + src)}">${escapeHtml(v)}</td>`;
+          } else {
+            html += `<td>${escapeHtml(v)}</td>`;
+          }
+        }
+        html += '</tr>';
+      });
+      html += '</tbody></table></div>';
+      return html;
+    }
+
+    function renderCandFold(summary, cardsHtml, count) {
+      if (!cardsHtml || !count) return '';
+      return `<details>
+        <summary>${summary}（${count}）· 点击展开</summary>
+        <div class="cand-grid">${cardsHtml}</div>
+      </details>`;
+    }
+
+    function renderCandidates(cands, storePrefix) {
+      if (!cands || !cands.length) return '';
+      const cards = cands.map((c) => {
+        const key = `${storePrefix}_${c.index}`;
+        candStore[key] = c;
+        const title = candFileName(c);
+        const img = c.image_url
+          ? `<button type="button" class="preview-btn" data-cand-key="${key}" data-cand-prefix="${storePrefix}" title="查看裁剪图、OCR 表与竞选对比">
+              <img src="${String(c.image_url).replace(/"/g, '&quot;')}" alt="${title}" loading="lazy" />
+            </button>`
+          : `<div class="cap" style="padding:24px 10px;text-align:center;">无裁剪图</div>`;
+        return `<div class="cand-card ${c.status || ''}">
+          ${img}
+          <div class="meta">
+            <div class="title">${statusBadge(c.status)} <span>${title}</span></div>
+          </div>
+        </div>`;
+      }).join('');
+      return renderCandFold('裁剪候选', cards, cands.length);
+    }
+
+    function renderDateOcrCard(ctx) {
+      if (!ctx) return '';
+      const meta = ctx.date_ocr || {};
+      const bestUrl = ctx.date_best_url || meta.best_image_url || '';
+      const cropUrl = ctx.date_crop_url || meta.image_url || '';
+      const stages = Array.isArray(ctx.date_stages) ? ctx.date_stages : [];
+      const steps = Array.isArray(ctx.date_steps) && ctx.date_steps.length
+        ? ctx.date_steps
+        : (Array.isArray(ctx.date_candidates) ? ctx.date_candidates : []);
+      const hasImg = !!(bestUrl || cropUrl || stages.length || steps.length);
+      const dateOk = meta.ok === true || !!(ctx.base_date || meta.date_str);
+      const baseDate = ctx.base_date || meta.date_str || '-';
+      const source = ctx.date_source || meta.date_source || '-';
+      const reason = meta.reason || '';
+      const reasonLabel = ctx.date_reason_label || reason || '';
+      const message = meta.message || '';
+      const raw = (meta.raw_texts || []).slice(0, 8).join(' · ');
+      if (!hasImg && meta.ok !== true && meta.ok !== false && !ctx.base_date && !reason) {
+        return '';
+      }
+      const st = dateOk
+        ? '<span class="badge ok">成功</span>'
+        : '<span class="badge fail">失败</span>';
+      const winnerUrl = bestUrl || cropUrl;
+      const winnerCap = bestUrl ? '采用结果 date_crop_best' : '日期主裁剪 date_crop';
+
+      function itemMark(c) {
+        if (c.is_best || (c.ok && c.date_str)) {
+          return '<span class="badge ok" style="font-size:0.72rem;">采用</span>';
+        }
+        if (c.skipped) {
+          return '<span class="badge" style="font-size:0.72rem;">跳过</span>';
+        }
+        if (c.ok === false) {
+          return '<span class="badge fail" style="font-size:0.72rem;">未认出</span>';
+        }
+        return '';
+      }
+
+      function renderStepItem(c) {
+        if (!c || !c.image_url) return '';
+        const label = c.label || c.name || '过程图';
+        const hint = c.hint || '';
+        const file = c.name || '';
+        const safeUrl = String(c.image_url).replace(/"/g, '&quot;');
+        const safeCap = String(label + (file ? ' · ' + file : '')).replace(/"/g, '&quot;');
+        return `<div class="date-stage-item ${c.is_best ? 'winner' : ''}">
+          <div class="item-label">${label} ${itemMark(c)}</div>
+          <button type="button" class="preview-btn" data-preview-src="${safeUrl}" data-preview-cap="${safeCap}" title="点击大屏预览">
+            <img src="${safeUrl}" alt="${safeCap}" loading="lazy" />
+          </button>
+          ${hint ? `<div class="date-step-hint">${hint}</div>` : ''}
+          ${file ? `<div class="date-step-file">${file}</div>` : ''}
+        </div>`;
+      }
+
+      let processBlock = '';
+      if (stages.length) {
+        const stageFolds = stages.map((sg) => {
+          const items = Array.isArray(sg.items) ? sg.items : [];
+          const imgs = items.map(renderStepItem).filter(Boolean).join('');
+          if (!imgs) return '';
+          const n = items.filter((x) => x && x.image_url).length;
+          const okMark = sg.ok
+            ? '<span class="badge ok" style="font-size:0.72rem;">本阶段命中</span>'
+            : '';
+          return `<details class="date-stage-fold" open>
+            <summary>${sg.title || ''}（${n} 张）${okMark}</summary>
+            ${sg.hint ? `<div class="date-stage-hint">${sg.hint}</div>` : ''}
+            <div class="date-stage-grid">${imgs}</div>
+          </details>`;
+        }).join('');
+        processBlock = `<div class="date-steps-wrap"><div class="date-steps-title">识别过程（仅含已执行阶段）</div>${stageFolds}</div>`;
+      } else if (steps.length) {
+        // 兼容旧履历无 date_stages
+        const stepFolds = steps.map((c, idx) => {
+          if (!c || !c.image_url) return '';
+          const label = c.label || c.name || ('步骤' + (c.index ?? idx));
+          const safeUrl = String(c.image_url).replace(/"/g, '&quot;');
+          const safeCap = String(label + (c.name ? ' · ' + c.name : '')).replace(/"/g, '&quot;');
+          return `<details class="date-step-fold">
+            <summary>${label} ${itemMark(c)}</summary>
+            <div class="cand-card ${c.is_best ? 'winner' : ''}" style="max-width:420px;">
+              <button type="button" class="preview-btn" data-preview-src="${safeUrl}" data-preview-cap="${safeCap}" title="点击大屏预览">
+                <img src="${safeUrl}" alt="${safeCap}" loading="lazy" />
+              </button>
+              <div class="meta">
+                ${c.hint ? `<div class="date-step-hint">${c.hint}</div>` : ''}
+                ${c.name ? `<div class="date-step-file">${c.name}</div>` : ''}
+              </div>
+            </div>
+          </details>`;
+        }).join('');
+        processBlock = stepFolds
+          ? `<div class="date-steps-wrap"><div class="date-steps-title">识别过程（${steps.length} 步，仅含已执行）</div>${stepFolds}</div>`
+          : '';
+      }
+
+      return `<section class="sub-card">
+        <h3>日期 OCR ${st}</h3>
+        <div class="date-result">
+          <div class="date-value">${baseDate}</div>
+          <div class="date-meta">来源：${source}${reasonLabel ? ` · ${reasonLabel}` : ''}</div>
+          ${reason && reasonLabel !== reason ? `<div class="date-meta" style="opacity:.75;">码：${reason}</div>` : ''}
+          ${message && !dateOk ? `<div class="date-meta" style="color:var(--err);">${message}</div>` : ''}
+          ${raw ? `<div class="date-meta">原文：${raw}</div>` : ''}
+        </div>
+        <div class="imgs">${imgCard(winnerUrl, winnerCap)}</div>
+        ${processBlock}
+      </section>`;
+    }
+
+    function renderTableOcrCard(ctx, storePrefix) {
+      if (!ctx) return '';
+      const cands = ctx.candidates || [];
+      sideFinalStore[storePrefix] = {
+        headers: ctx.headers || [],
+        rows: ctx.rows || [],
+        row_tags: ctx.row_tags || [],
+        gap_fill_map: ctx.gap_fill_map || [],
+        gap_filled: Number(ctx.gap_filled || 0) || 0,
+      };
+      const st = ctx.ok
+        ? '<span class="badge ok">合格</span>'
+        : '<span class="badge fail">未达下限</span>';
+      const exp = ctx.expected_cells != null ? ctx.expected_cells : '-';
+      const gapN = Number(ctx.gap_filled || 0) || 0;
+      const dateFailed = !!(ctx.date_ocr && ctx.date_ocr.ok === false)
+        || String(ctx.date_source || '') === 'failed'
+        || String(ctx.reason || '').startsWith('date');
+      const gapNote = gapN > 0
+        ? `<p class="gap-legend"><span class="swatch"></span>同伴补录 ${gapN} 格（高亮 · 悬停查看来源候选）；胜出原值不覆盖</p>`
+        : '';
+      return `<section class="sub-card">
+        <h3>表格 OCR ${st}
+          <span style="color:var(--muted);font-size:0.82rem;font-weight:500;">
+            采纳/识别 ${ctx.point_count ?? 0}/${ctx.ocr_filled ?? '-'} · 预计 ${exp}${gapN > 0 ? ` · 补录 ${gapN}` : ''}
+          </span>
+        </h3>
+        <div class="imgs">${imgCard(ctx.best_table_url, '最终胜出表格原图 best_table')}</div>
+        <div class="links" style="margin-top:10px;">
+          ${ctx.excel_url ? `<a href="${ctx.excel_url}" target="_blank">下载 Excel</a>` : ''}
+          ${copyPathBtn(ctx.best_table_path, '复制 best_table 路径')}
+        </div>
+        ${ctx.message && !dateFailed ? `<p style="color:var(--err);font-size:0.88rem;margin:10px 0 0;">${ctx.message}</p>` : ''}
+        ${renderTable(ctx.headers, ctx.rows || [], ctx.row_tags, ctx.gap_fill_map)}
+        ${gapNote}
+        ${renderCandidates(cands, storePrefix)}
+      </section>`;
+    }
+
+    function renderSideColumn(side, name, storePrefix) {
+      if (!side) {
+        return `<div class="side-col"><section class="card"><p class="side-title">${name}</p><p style="color:var(--muted);">无数据</p></section></div>`;
+      }
+      const st = side.ok
+        ? '<span class="badge ok">合格</span>'
+        : '<span class="badge fail">未达下限</span>';
+      const titleExtra = side.title ? ` · ${side.title}` : '';
+      return `<div class="side-col">
+        <section class="card">
+          <p class="side-title">${name}${titleExtra} ${st}
+            <span class="muted">采纳/识别 ${side.point_count ?? 0}/${side.ocr_filled ?? '-'}</span>
+          </p>
+          <div class="imgs hero">${imgCard(side.image_url, `${name}切分图`)}</div>
+          <div class="links" style="margin-top:10px;">
+            ${copyPathBtn(side.image_path, '复制切分图路径')}
+          </div>
+        </section>
+        ${renderDateOcrCard(side)}
+        ${renderTableOcrCard(side, storePrefix)}
+      </div>`;
+    }
+
+    function renderSingleStack(run) {
+      return `<div class="side-col">
+        ${renderDateOcrCard(run)}
+        ${renderTableOcrCard(run, 'S')}
+      </div>`;
+    }
+
+    async function load() {
+      const main = document.getElementById('main');
+      try {
+        for (const key of Object.keys(candStore)) delete candStore[key];
+        for (const key of Object.keys(sideFinalStore)) delete sideFinalStore[key];
+        const resp = await fetch('/api/runs/' + encodeURIComponent(runId));
+        const data = await resp.json();
+        if (!resp.ok) throw new Error(data.detail || '未找到记录');
+        const run = data.run;
+        document.title = '执行详情 · ' + (run.finished_at || run.id);
+        document.getElementById('title').textContent = run.finished_at || run.id;
+        document.getElementById('sub').textContent =
+          `${run.mode === 'dual' ? '双屏' : '单屏'} · ${triggerLabel(run.trigger)} · ${run.id}`;
+
+        const pi = run.pi || {};
+        let body = `
+          <div class="summary">
+            ${badgeHtml(run)}
+            <span>触发：${triggerLabel(run.trigger)}</span>
+            <span>点数：${run.mode === 'dual'
+              ? `左 ${(run.point_count_left ?? 0)}/${(run.ocr_filled_left ?? '-')} 预计${(run.expected_cells_left ?? (run.left && run.left.expected_cells) ?? '-')} · 右 ${(run.point_count_right ?? 0)}/${(run.ocr_filled_right ?? '-')} 预计${(run.expected_cells_right ?? (run.right && run.right.expected_cells) ?? '-')}`
+              : `采纳/识别 ${(run.point_count ?? 0)}/${(run.ocr_filled ?? '-')} · 预计 ${(run.expected_cells ?? '-')}`}</span>
+            <span>min_points：${run.min_points ?? '-'}</span>
+            <span>耗时：${(() => {
+              const t = run.timing || {};
+              const ocr = t.ocr_ms ?? run.ocr_ms;
+              const total = t.total_ms ?? run.total_ms;
+              const fmt = (ms) => {
+                if (ms == null) return '-';
+                const n = Number(ms);
+                if (!Number.isFinite(n)) return '-';
+                return n < 1000 ? Math.round(n) + 'ms' : (n / 1000).toFixed(1) + 's';
+              };
+              return `OCR ${fmt(ocr)} / 总 ${fmt(total)}`;
+            })()}</span>
+            <span>写 PI：${pi.skipped ? '跳过' : `${pi.written ?? 0}/${pi.total ?? 0}`}</span>
+            ${run.message ? `<span style="color:var(--err)">${run.message}</span>` : ''}
+          </div>
+          <section class="card">
+            <h2>总画面</h2>
+            ${(() => {
+              const name = (run.display_name || run.upload_name || '').trim();
+              if (!name) return '';
+              return `<div class="sub" style="margin:0 0 10px;color:var(--muted);word-break:break-all;">上传文件：<strong style="color:var(--text)">${name.replace(/</g,'&lt;')}</strong></div>`;
+            })()}
+            <div class="imgs hero">
+              ${imgCard(run.source_url || run.capture_url, '源图')}
+            </div>
+            <div class="links" style="margin-top:10px;">
+              ${copyPathBtn(run.source_path || run.capture_path, '复制落盘路径')}
+              ${run.excel_url ? `<a href="${run.excel_url}" target="_blank">下载 Excel</a>` : ''}
+            </div>
+          </section>
+        `;
+
+        if (run.mode === 'dual') {
+          body += `<div class="side-grid">
+            ${renderSideColumn(run.left, '左侧', 'L')}
+            ${renderSideColumn(run.right, '右侧', 'R')}
+          </div>`;
+        } else {
+          body += renderSingleStack(run);
+        }
+
+        main.innerHTML = body;
+        bindPreview(main);
+      } catch (e) {
+        main.innerHTML = `<div class="err">${e.message || e}</div>`;
+      }
+    }
+
+    load();
+  </script>
+</body>
+</html>

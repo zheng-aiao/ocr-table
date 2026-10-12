@@ -1,0 +1,9 @@
+现场解压后依次执行：
+1. cd 解压后的 gx-capture-demo 目录
+2. 建环境（需 Python 3.10~3.12，不要 3.14）setup-venv.bat
+3. 改 config.yaml：相机 IP/账号、PI 地址、mode=dual 等
+4. 启动run.bat
+
+
+浏览器打开：http://127.0.0.1:8088/
+联调页：http://127.0.0.1:8088/debug
