@@ -1,0 +1,128 @@
+珙县抓拍 OCR → PI 部署说明
+========================
+
+统一入口：根目录 ocr.bat（双击出菜单，或命令行带参数）。
+脚本实现均在 scripts\，请勿删该目录。
+
+
+一、常用命令
+------------
+
+  ocr.bat                 交互菜单
+  ocr.bat help            打印命令说明
+
+  ocr.bat install         开发机：检测/安装 Python 3.12，创建 .venv，按 requirements.txt 装依赖（需联网）
+  ocr.bat offline         开发机：根据当前 .venv 重建便携 python\（已有则先删再建）
+  ocr.bat start           后台启动服务（优先 python\，否则 .venv）
+  ocr.bat stop            停止服务
+  ocr.bat restart         停止后重新启动（改代码/配置后常用）
+  ocr.bat pack            打轻量更新包 → 上级目录 gx-capture-demo-update.zip（不含 python\）
+  ocr.bat pack -all       打全量离线包 → 上级目录 gx-capture-demo-field.zip（含 python\）
+                          若缺少 python\，会自动尝试 install / offline 再打包
+
+访问地址（启动后）：
+  http://127.0.0.1:8088/          首页（执行履历）
+  http://127.0.0.1:8088/debug     分步联调
+  http://127.0.0.1:8088/single    单屏
+  http://127.0.0.1:8088/dual      双屏
+
+日志：data\ocr.log
+进程号：data\ocr.pid
+
+
+二、目录结构
+------------
+
+  gx-capture-demo\
+  │
+  ├─ ocr.bat                 唯一对外入口
+  ├─ config.yaml             相机 / OCR / PI / 定时等配置（现场必改）
+  ├─ requirements.txt        开发机 pip 依赖清单
+  ├─ 部署说明.txt            本文件
+  ├─ README.md               功能与 API 说明
+  │
+  ├─ app\                    程序本体（打包时整目录带走）
+  │   ├─ backend\            业务后端 *.py（FastAPI / 抓图 / 流水线 / PI）
+  │   ├─ static\             前端页面
+  │   ├─ ocr_engine\         表格 OCR 引擎
+  │   └─ pidll\              PI 接口 DLL（piapi.dll 等）
+  │
+  ├─ scripts\                install / start / stop / pack / offline 等脚本
+  │
+  ├─ data\                   运行数据（自动生成，一般不必打包进更新包）
+  │   ├─ captures\           抓图
+  │   ├─ ocr_runs\           OCR 中间结果
+  │   ├─ runs\               执行履历 JSON
+  │   ├─ exports\            Excel 导出
+  │   ├─ ocr.log             服务日志
+  │   └─ ocr.pid             后台进程号
+  │
+  ├─ python\                 便携 Python 3.12 + 依赖（离线现场用；勿删）
+  └─ .venv\                  开发机虚拟环境（仅开发用，现场可不带）
+
+
+三、开发机：首次准备与打全量包
+------------------------------
+
+环境要求：Python 3.10～3.12（推荐 3.12；不要用 3.13/3.14）。
+
+  1. cd 到本目录
+  2. ocr.bat install          # 建 .venv 并装依赖（需联网）
+  3. 编辑 config.yaml         # 相机、PI、单双屏等
+  4. ocr.bat start            # 本机联调；浏览器打开上述地址
+  5. ocr.bat offline          # 生成便携 python\（可重复执行，会先清空再建）
+  6. ocr.bat pack -all        # 生成 ..\gx-capture-demo-field.zip
+
+说明：
+  - start 时若已有 python\，优先用 python\；否则用 .venv
+  - 改依赖后：再 install → offline → pack -all
+  - 只更新业务代码（不换解释器）：ocr.bat pack 即可
+
+
+四、现场：离线部署与启动
+------------------------
+
+全量包已含 python\，现场无需联网、无需安装 Python。
+
+  1. 解压 gx-capture-demo-field.zip 到任意目录
+     （路径尽量避免奇怪特殊字符）
+  2. 用记事本编辑 config.yaml：
+       - camera：IP / 账号 / 密码 / 通道
+       - pi：服务器 / 账号 / 密码（dll 默认 app\pidll，一般不用改）
+       - capture.mode：single 或 dual，以及对应 crop/tag
+  3. ocr.bat start
+     或双击 ocr.bat → 菜单选「start」
+  4. 本机浏览器打开 http://127.0.0.1:8088/
+  5. 停止：ocr.bat stop
+     更新代码后：ocr.bat restart
+
+注意：
+  - 不要删除 python\ 目录
+  - 现场一般不必执行 install / offline
+  - data\ 下内容运行后自动出现；备份履历可拷贝 data\runs、data\ocr_runs
+
+
+五、现场：轻量更新（不含 python\）
+--------------------------------
+
+开发机执行 ocr.bat pack，得到 ..\gx-capture-demo-update.zip。
+
+  1. ocr.bat stop
+  2. 解压覆盖：app\、scripts\、ocr.bat、config.yaml 等
+     （若现场 config 与包内不同，覆盖后把相机/PI 地址改回现场值）
+  3. ocr.bat start
+
+
+六、配置要点（config.yaml）
+--------------------------
+
+  camera.*                 海康 ISAPI 抓图
+  capture.mode             single | dual
+  capture.single / dual    测点前缀 tag、裁剪 crop、table_crop 等
+  capture.schedule         定时处置开关与间隔
+  ocr.workdir              默认 app/ocr_engine
+  ocr.min_points           有效点数过低则本轮失败、不写 PI
+  pi.dll_dir               默认 app/pidll
+  pi.server / user / password
+
+更细的 API 与双屏规则见 README.md。

@@ -1,0 +1,3 @@
+# Python virtual environments / local Python installs
+.venv/
+python/

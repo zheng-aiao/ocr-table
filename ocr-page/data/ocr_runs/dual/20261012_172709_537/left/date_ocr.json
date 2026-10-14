@@ -1,0 +1,171 @@
+{
+  "ok": false,
+  "base_date": null,
+  "date_source": "failed",
+  "date_ocr": {
+    "ok": false,
+    "date_str": null,
+    "raw_texts": [
+      "新华61一实时电能市场发布信息",
+      "2026:09",
+      "新华161一实时电能市场发布信息",
+      "202608",
+      "新华161一实时电能市场发布信息",
+      "2026:03",
+      "新平61一实时电能市场发布信息",
+      "202008",
+      "新华161一实时电能市场发布信息",
+      "202009",
+      "新华61一实时电能市场发布信息",
+      "2026:09",
+      "新华161一实时电能市场发布信息",
+      "202608",
+      "新华161一实时电能市场发布信息",
+      "2026-03",
+      "新平161一实时电能市场发布信息",
+      "202608",
+      "新华161一实时电能市场发布信息",
+      "202009",
+      "现货生产信息",
+      "新华161一实时电能市场发布信息",
+      "首202608",
+      "2MWS"
+    ],
+    "crop": [
+      0.0,
+      0.16,
+      0.48,
+      0.26
+    ],
+    "image_path": "D:\\yw\\gx-ocr\\ocr-page\\data\\ocr_runs\\dual\\20261012_172709_537\\left\\date_crop_cfg.jpg",
+    "best_image_path": "",
+    "candidate_image_paths": [
+      "D:\\yw\\gx-ocr\\ocr-page\\data\\ocr_runs\\dual\\20261012_172709_537\\left\\date_crop_cfg.jpg",
+      "D:\\yw\\gx-ocr\\ocr-page\\data\\ocr_runs\\dual\\20261012_172709_537\\left\\date_crop_cfg_enlarge_01.jpg"
+    ],
+    "reason": "date_not_found",
+    "attempts": [
+      {
+        "crop": [
+          0.0,
+          0.16,
+          0.48,
+          0.26
+        ],
+        "texts": [
+          "新华61一实时电能市场发布信息",
+          "2026:09",
+          "新华161一实时电能市场发布信息",
+          "202608",
+          "新华161一实时电能市场发布信息",
+          "2026:03",
+          "新平61一实时电能市场发布信息",
+          "202008",
+          "新华161一实时电能市场发布信息",
+          "202009",
+          "新华61一实时电能市场发布信息",
+          "2026:09"
+        ],
+        "ok": false,
+        "enhance": false,
+        "phase": 0,
+        "stage": "config_fallback",
+        "crop_index": 0,
+        "local_index": 0,
+        "image_path": "D:\\yw\\gx-ocr\\ocr-page\\data\\ocr_runs\\dual\\20261012_172709_537\\left\\date_crop_cfg.jpg"
+      },
+      {
+        "crop": [
+          0.0,
+          0.13,
+          0.52,
+          0.3
+        ],
+        "texts": [
+          "现货生产信息",
+          "新华161一实时电能市场发布信息",
+          "首202608",
+          "2MWS",
+          "现货生产信息",
+          "济华161一实时电能市场发布信息",
+          "202608",
+          "三",
+          "2MW",
+          "现货生产信息",
+          "新华161一实时电能市场发布信息",
+          "招烟"
+        ],
+        "ok": false,
+        "enhance": false,
+        "phase": 0,
+        "stage": "config_fallback",
+        "crop_index": 1,
+        "local_index": 1,
+        "image_path": "D:\\yw\\gx-ocr\\ocr-page\\data\\ocr_runs\\dual\\20261012_172709_537\\left\\date_crop_cfg_enlarge_01.jpg"
+      },
+      {
+        "crop": [
+          0.0,
+          0.16,
+          0.48,
+          0.26
+        ],
+        "texts": [
+          "新华61一实时电能市场发布信息",
+          "2026:09",
+          "新华161一实时电能市场发布信息",
+          "202608",
+          "新华161一实时电能市场发布信息",
+          "2026:03",
+          "新平61一实时电能市场发布信息",
+          "202008",
+          "新华161一实时电能市场发布信息",
+          "202009"
+        ],
+        "ok": false,
+        "enhance": true,
+        "phase": 0,
+        "stage": "config_fallback",
+        "crop_index": 0,
+        "local_index": 0,
+        "image_path": "D:\\yw\\gx-ocr\\ocr-page\\data\\ocr_runs\\dual\\20261012_172709_537\\left\\date_crop_cfg.jpg"
+      },
+      {
+        "crop": [
+          0.0,
+          0.13,
+          0.52,
+          0.3
+        ],
+        "texts": [
+          "现货生产信息",
+          "新华161一实时电能市场发布信息",
+          "首202608",
+          "2MWS",
+          "现货生产信息",
+          "济华161一实时电能市场发布信息",
+          "202608",
+          "三",
+          "2MW",
+          "现货生产信息",
+          "新华161一实时电能市场发布信息",
+          "招烟"
+        ],
+        "ok": false,
+        "enhance": true,
+        "phase": 0,
+        "stage": "config_fallback",
+        "crop_index": 1,
+        "local_index": 1,
+        "image_path": "D:\\yw\\gx-ocr\\ocr-page\\data\\ocr_runs\\dual\\20261012_172709_537\\left\\date_crop_cfg_enlarge_01.jpg"
+      }
+    ],
+    "locate": {
+      "ok": false
+    },
+    "message": "未识别到左上角日期筛选框中的业务日期，已跳过表格 OCR；OCR 原文：新华61一实时电能市场发布信息 / 2026:09 / 新华161一实时电能市场发布信息 / 202608 / 新华161一实时电能市场发布信息 / 2026:03 / 新平61一实时电能市场发布信息 / 202008"
+  },
+  "reason": "date_not_found",
+  "message": "未识别到左上角日期筛选框中的业务日期，已跳过表格 OCR；OCR 原文：新华61一实时电能市场发布信息 / 2026:09 / 新华161一实时电能市场发布信息 / 202608 / 新华161一实时电能市场发布信息 / 2026:03 / 新平61一实时电能市场发布信息 / 202008",
+  "table_ocr_skipped": true
+}

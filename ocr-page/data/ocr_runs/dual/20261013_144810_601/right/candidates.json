@@ -1,0 +1,69 @@
+[
+  {
+    "index": 0,
+    "label": "table_auto",
+    "name": "cand_table_auto",
+    "crop": null,
+    "status": "winner",
+    "reason": "综合最优（cand_table_auto）：表头质量=5，实心行=3，密度=105；同分时优先更紧裁剪",
+    "score": [
+      5,
+      3,
+      105,
+      0.4158
+    ],
+    "headers": [
+      "16:00",
+      "16:15",
+      "16:30",
+      "16:45",
+      "17:00"
+    ],
+    "rows": [
+      [
+        "280",
+        "280",
+        "280",
+        "280",
+        "280"
+      ],
+      [
+        "280",
+        "280",
+        "280",
+        "280",
+        "280"
+      ],
+      [
+        "3.576",
+        "3.439",
+        "85.287",
+        "937.56",
+        "66.018"
+      ]
+    ],
+    "point_count": 15,
+    "image_path": "D:\\yw\\gx-ocr\\ocr-page\\data\\ocr_runs\\dual\\20261013_144810_601\\right\\cand_table_auto.jpg",
+    "ocr_ms": 42032
+  },
+  {
+    "index": 1,
+    "label": "table_fixed",
+    "name": "cand_table_fixed",
+    "crop": [
+      0.03,
+      0.52,
+      1.0,
+      0.9
+    ],
+    "status": "skipped",
+    "reason": "未参与比较：已提前选出足够好的候选（胜出者 cand_table_auto）",
+    "score": null,
+    "headers": [],
+    "rows": [],
+    "point_count": 0,
+    "image_path": "",
+    "skip_reason": "early_stop",
+    "ocr_ms": 0
+  }
+]

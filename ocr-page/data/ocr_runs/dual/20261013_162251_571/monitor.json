@@ -1,0 +1,76 @@
+{
+  "ok": true,
+  "crop": [
+    0.0,
+    0.0,
+    1.0,
+    0.835
+  ],
+  "mode": "structure",
+  "ms": 272,
+  "detail": {
+    "probe_wh": [
+      800,
+      600
+    ],
+    "src_wh": [
+      2560,
+      1920
+    ],
+    "structure_raw": [
+      0.0625,
+      0.006666666666666667,
+      0.91375,
+      0.82
+    ],
+    "energy_raw": null,
+    "bright_raw": [
+      0.05375,
+      0.0,
+      0.9275,
+      0.8083333333333333
+    ],
+    "structure": [
+      0.0,
+      0.006666666666666667,
+      1.0,
+      0.82
+    ],
+    "energy": null,
+    "bright": [
+      0.0,
+      0.0,
+      1.0,
+      0.8083333333333333
+    ],
+    "width_policy": {
+      "structure": "width_full",
+      "energy": "none",
+      "bright": "width_full"
+    },
+    "chosen_score": 0.3028,
+    "candidates": [
+      {
+        "mode": "structure",
+        "crop": [
+          0.0,
+          0.0,
+          1.0,
+          0.835
+        ],
+        "score": 0.3028
+      },
+      {
+        "mode": "bright",
+        "crop": [
+          0.0,
+          0.0,
+          1.0,
+          0.8233333333333334
+        ],
+        "score": 0.1885
+      }
+    ]
+  },
+  "enabled": true
+}
