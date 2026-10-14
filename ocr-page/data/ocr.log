@@ -1,0 +1,220 @@
+﻿start 2026-10-13T16:22:44.5787307+08:00
+INFO:     Started server process [22020]
+INFO:     Waiting for application startup.
+2026-10-13 16:22:45,935 [INFO] gx-capture-demo: config loaded from D:\yw\gx-ocr\ocr-page\config.yaml ; ocr_runs=D:\yw\gx-ocr\ocr-page\data\ocr_runs ; onnx_threads=2
+2026-10-13 16:22:45,936 [INFO] app.backend.scheduler: 定时调度已启动 enabled=False interval_minutes=15 capture=True ocr=True pi=True
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://0.0.0.0:8088 (Press CTRL+C to quit)
+INFO:     127.0.0.1:61503 - "GET /debug HTTP/1.1" 200 OK
+INFO:     127.0.0.1:61503 - "GET /api/config/view HTTP/1.1" 200 OK
+INFO:     127.0.0.1:61503 - "GET /api/config/pi HTTP/1.1" 200 OK
+2026-10-13 16:22:51,848 [INFO] app.backend.monitor_crop: 显示器区域 ok=1 mode=structure crop=[0.0, 0.0, 1.0, 0.835] ms=272
+2026-10-13 16:22:51,926 [INFO] app.backend.monitor_crop: 显示器裁剪 mode=structure crop=(0.0, 0.0, 1.0, 0.835) → D:\yw\gx-ocr\ocr-page\data\ocr_runs\dual\20261013_162251_571\00_monitor.jpg
+2026-10-13 16:22:51,974 [INFO] app.backend.dual_seam: 双屏缝定位 ok=True seam=0.4781 mode=sidebar ms=46
+2026-10-13 16:22:51,975 [INFO] app.backend.pipeline_dual: 双屏采用自动缝 seam=0.4781 mode=sidebar left=(0.0, 0.0, 0.4721, 1.0) right=(0.48410000000000003, 0.0, 1.0, 1.0) (on=00_monitor.jpg)
+2026-10-13 16:22:52,024 [INFO] app.backend.pipeline_dual: 双屏 OCR left crop=(0.0, 0.0, 0.4721, 1.0) tag=GX.DEMO.OCR.L fallback_date=None → D:\yw\gx-ocr\ocr-page\data\ocr_runs\dual\20261013_162251_571\left.jpg
+2026-10-13 16:22:52,065 [INFO] app.backend.pipeline_dual: 双屏 OCR right crop=(0.48410000000000003, 0.0, 1.0, 1.0) tag=GX.DEMO.OCR.R fallback_date=None → D:\yw\gx-ocr\ocr-page\data\ocr_runs\dual\20261013_162251_571\right.jpg
+2026-10-13 16:22:52,065 [INFO] app.backend.pipeline_dual: 双屏 OCR 并行 left|right
+2026-10-13 16:24:02,700 [INFO] app.backend.ocr_bridge: 自动定位日期筛选框 layout=dual method=label search=(0.0, 0.1, 0.6, 0.48) crop=(0.1049, 0.3108, 0.451, 0.3607)
+2026-10-13 16:24:16,073 [INFO] app.backend.ocr_bridge: 自动定位日期筛选框 layout=dual method=label search=(0.0, 0.1, 0.6, 0.48) crop=(0.2949, 0.3209, 0.6158, 0.3708)
+2026-10-13 16:24:23,130 [INFO] app.backend.ocr_bridge: 日期 OCR 成功 date=2026-09-02 conf=3 reason=full_ymd_auto_locate#0 crop=[0.1049, 0.3108, 0.451, 0.3607] image=D:\yw\gx-ocr\ocr-page\data\ocr_runs\dual\20261013_162251_571\left.jpg
+2026-10-13 16:24:23,133 [INFO] app.backend.ocr_bridge: OCR 识别 #0 layout=dual scale=2.0 min_confidence=0.3 label=table_auto crop=None image=D:\yw\gx-ocr\ocr-page\data\ocr_runs\dual\20261013_162251_571\left.jpg
+2026-10-13 16:24:39,102 [INFO] app.backend.ocr_bridge: 日期 OCR 成功 date=2026-09-22 conf=3 reason=full_ymd_auto_locate#0 crop=[0.2949, 0.3209, 0.6158, 0.3708] image=D:\yw\gx-ocr\ocr-page\data\ocr_runs\dual\20261013_162251_571\right.jpg
+2026-10-13 16:24:39,105 [INFO] app.backend.ocr_bridge: OCR 识别 #0 layout=dual scale=2.0 min_confidence=0.3 label=table_auto crop=None image=D:\yw\gx-ocr\ocr-page\data\ocr_runs\dual\20261013_162251_571\right.jpg
+2026-10-13 16:24:54,622 [INFO] app.backend.ocr_bridge: OCR 候选 #0 score=(10, 3, 110, -0.41580000000000006) headers=10 ocr_ms=30853 head=['16:15', '16:30']…['18:15', '18:30']
+2026-10-13 16:24:54,623 [INFO] app.backend.ocr_bridge: OCR 识别 #1 layout=dual scale=2.0 min_confidence=0.3 label=table_fixed crop=(0.02, 0.52, 0.97, 0.9) image=D:\yw\gx-ocr\ocr-page\data\ocr_runs\dual\20261013_162251_571\left.jpg
+2026-10-13 16:25:01,853 [WARNING] app.backend.ocr_bridge: OCR 裁剪无有效表 #0 crop=None ocr_ms=21966
+2026-10-13 16:25:01,853 [INFO] app.backend.ocr_bridge: OCR 识别 #1 layout=dual scale=2.0 min_confidence=0.3 label=table_fixed crop=(0.03, 0.52, 1.0, 0.9) image=D:\yw\gx-ocr\ocr-page\data\ocr_runs\dual\20261013_162251_571\right.jpg
+2026-10-13 16:25:30,425 [INFO] app.backend.ocr_bridge: OCR 候选 #1 score=(5, 3, 105, -0.3686) headers=5 ocr_ms=27994 head=['16:00', '16:15']…['16:45', '17:00']
+2026-10-13 16:25:30,442 [INFO] app.backend.excel_export: excel.enabled=false，跳过导出
+2026-10-13 16:25:36,226 [INFO] app.backend.ocr_bridge: OCR 候选 #1 score=(7, 3, 107, -0.361) headers=7 ocr_ms=41263 head=['16:15', '16:30']…['17:30', '17:45']
+2026-10-13 16:25:36,240 [INFO] app.backend.excel_export: excel.enabled=false，跳过导出
+INFO:     127.0.0.1:61503 - "POST /api/ocr/dual/upload HTTP/1.1" 200 OK
+INFO:     127.0.0.1:61503 - "GET /data/ocr_runs/dual/20261013_162251_571/00_source.jpg?t=1791879936321 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:61876 - "GET /data/ocr_runs/dual/20261013_162251_571/right.jpg?t=1791879936322 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:61875 - "GET /data/ocr_runs/dual/20261013_162251_571/left.jpg?t=1791879936322 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:61877 - "GET /data/ocr_runs/dual/20261013_162251_571/00_monitor.jpg?t=1791879936322 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62053 - "GET /runs/dual_20261013_162251_571 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62053 - "GET /api/runs/dual_20261013_162251_571 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62053 - "GET /data/ocr_runs/dual/20261013_162251_571/00_source.jpg HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62054 - "GET /data/ocr_runs/dual/20261013_162251_571/00_monitor.jpg HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62055 - "GET /data/ocr_runs/dual/20261013_162251_571/left.jpg HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62058 - "GET /data/ocr_runs/dual/20261013_162251_571/left/date_crop.jpg HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62056 - "GET /data/ocr_runs/dual/20261013_162251_571/left/date_crop_best.jpg HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62057 - "GET /data/ocr_runs/dual/20261013_162251_571/left/date_locate.jpg HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62057 - "GET /data/ocr_runs/dual/20261013_162251_571/left/best_table.jpg HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62055 - "GET /data/ocr_runs/dual/20261013_162251_571/right.jpg HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62053 - "GET /data/ocr_runs/dual/20261013_162251_571/right/date_crop.jpg HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62058 - "GET /data/ocr_runs/dual/20261013_162251_571/right/date_locate.jpg HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62056 - "GET /data/ocr_runs/dual/20261013_162251_571/right/date_crop_best.jpg HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62054 - "GET /data/ocr_runs/dual/20261013_162251_571/right/best_table.jpg HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62055 - "GET /data/ocr_runs/dual/20261013_162251_571/right/cand_table_fixed.jpg HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62054 - "GET /data/ocr_runs/dual/20261013_162251_571/right/cand_table_auto.jpg HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62054 - "GET /data/ocr_runs/dual/20261013_162251_571/left/cand_table_auto.jpg HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62055 - "GET /data/ocr_runs/dual/20261013_162251_571/left/cand_table_fixed.jpg HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62592 - "GET /runs/dual_20261013_151549_920 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62592 - "GET /api/runs/dual_20261013_151549_920 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62592 - "GET /data/ocr_runs/dual/20261013_151549_920/00_source.jpg HTTP/1.1" 304 Not Modified
+INFO:     127.0.0.1:62592 - "GET /data/ocr_runs/dual/20261013_151549_920/00_monitor.jpg HTTP/1.1" 304 Not Modified
+INFO:     127.0.0.1:62593 - "GET /data/ocr_runs/dual/20261013_151549_920/left.jpg HTTP/1.1" 304 Not Modified
+INFO:     127.0.0.1:62594 - "GET /data/ocr_runs/dual/20261013_151549_920/left/date_crop_best.jpg HTTP/1.1" 304 Not Modified
+INFO:     127.0.0.1:62597 - "GET /data/ocr_runs/dual/20261013_151549_920/left/best_table.jpg HTTP/1.1" 304 Not Modified
+INFO:     127.0.0.1:62596 - "GET /data/ocr_runs/dual/20261013_151549_920/left/date_crop.jpg HTTP/1.1" 304 Not Modified
+INFO:     127.0.0.1:62595 - "GET /data/ocr_runs/dual/20261013_151549_920/left/date_locate.jpg HTTP/1.1" 304 Not Modified
+INFO:     127.0.0.1:62592 - "GET /data/ocr_runs/dual/20261013_151549_920/right/date_locate.jpg HTTP/1.1" 304 Not Modified
+INFO:     127.0.0.1:62593 - "GET /data/ocr_runs/dual/20261013_151549_920/right/date_crop_best.jpg HTTP/1.1" 304 Not Modified
+INFO:     127.0.0.1:62594 - "GET /data/ocr_runs/dual/20261013_151549_920/right.jpg HTTP/1.1" 304 Not Modified
+INFO:     127.0.0.1:62596 - "GET /data/ocr_runs/dual/20261013_151549_920/right/date_crop.jpg HTTP/1.1" 304 Not Modified
+INFO:     127.0.0.1:62595 - "GET /data/ocr_runs/dual/20261013_151549_920/right/best_table.jpg HTTP/1.1" 304 Not Modified
+INFO:     127.0.0.1:62595 - "GET /data/ocr_runs/dual/20261013_151549_920/right/cand_table_auto.jpg HTTP/1.1" 304 Not Modified
+INFO:     127.0.0.1:62668 - "GET /data/ocr_runs/dual/20261013_151549_920/left/cand_table_auto.jpg HTTP/1.1" 304 Not Modified
+INFO:     127.0.0.1:62688 - "GET /data/ocr_runs/dual/20261013_162251_571/right/cand_table_auto.jpg HTTP/1.1" 304 Not Modified
+INFO:     127.0.0.1:62753 - "GET /api/runs?limit=12&offset=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62753 - "GET /data/ocr_runs/dual/20261013_162251_571/00_source.jpg HTTP/1.1" 304 Not Modified
+INFO:     127.0.0.1:62757 - "GET /data/ocr_runs/dual/20261013_144810_601/00_source.jpg HTTP/1.1" 304 Not Modified
+INFO:     127.0.0.1:62764 - "GET /data/ocr_runs/dual/20261013_143428_000/00_source.jpg HTTP/1.1" 304 Not Modified
+INFO:     127.0.0.1:62765 - "GET /data/ocr_runs/dual/20261013_142604_558/00_source.jpg HTTP/1.1" 304 Not Modified
+INFO:     127.0.0.1:62766 - "GET /data/ocr_runs/dual/20261013_111313_550/00_source.jpg HTTP/1.1" 304 Not Modified
+INFO:     127.0.0.1:62753 - "GET /data/ocr_runs/dual/20261012_172709_537/00_source.jpg HTTP/1.1" 304 Not Modified
+INFO:     127.0.0.1:62753 - "GET /debug HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62753 - "GET /api/config/view HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62753 - "GET /api/config/pi HTTP/1.1" 200 OK
+2026-10-13 16:34:31,559 [INFO] app.backend.monitor_crop: 显示器区域 ok=1 mode=bright crop=[0.0, 0.0917, 1.0, 0.785] ms=67
+2026-10-13 16:34:31,610 [INFO] app.backend.monitor_crop: 显示器裁剪 mode=bright crop=(0.0, 0.0917, 1.0, 0.785) → D:\yw\gx-ocr\ocr-page\data\ocr_runs\dual\20261013_163431_488\00_monitor.jpg
+2026-10-13 16:34:31,664 [INFO] app.backend.dual_seam: 双屏缝定位 ok=True seam=0.5000 mode=sidebar ms=51
+2026-10-13 16:34:31,664 [INFO] app.backend.pipeline_dual: 双屏采用自动缝 seam=0.5000 mode=sidebar left=(0.0, 0.0, 0.494, 1.0) right=(0.506, 0.0, 1.0, 1.0) (on=00_monitor.jpg)
+2026-10-13 16:34:31,701 [INFO] app.backend.pipeline_dual: 双屏 OCR left crop=(0.0, 0.0, 0.494, 1.0) tag=GX.DEMO.OCR.L fallback_date=None → D:\yw\gx-ocr\ocr-page\data\ocr_runs\dual\20261013_163431_488\left.jpg
+2026-10-13 16:34:31,736 [INFO] app.backend.pipeline_dual: 双屏 OCR right crop=(0.506, 0.0, 1.0, 1.0) tag=GX.DEMO.OCR.R fallback_date=None → D:\yw\gx-ocr\ocr-page\data\ocr_runs\dual\20261013_163431_488\right.jpg
+2026-10-13 16:34:31,736 [INFO] app.backend.pipeline_dual: 双屏 OCR 并行 left|right
+2026-10-13 16:34:54,793 [INFO] app.backend.ocr_bridge: 自动定位日期筛选框 layout=dual method=label search=(0.0, 0.06, 0.72, 0.42) crop=(0.2273, 0.2564, 0.5654, 0.3165)
+2026-10-13 16:35:08,296 [INFO] app.backend.ocr_bridge: 自动定位日期筛选框 layout=dual method=label search=(0.0, 0.06, 0.72, 0.42) crop=(0.28, 0.2653, 0.6002, 0.3254)
+2026-10-13 16:35:19,678 [INFO] app.backend.ocr_bridge: 日期 OCR 成功 date=2026-09-04 conf=3 reason=full_ymd_auto_locate#0 crop=[0.2273, 0.2564, 0.5654, 0.3165] image=D:\yw\gx-ocr\ocr-page\data\ocr_runs\dual\20261013_163431_488\left.jpg
+2026-10-13 16:35:19,680 [INFO] app.backend.ocr_bridge: OCR 识别 #0 layout=dual scale=2.0 min_confidence=0.3 label=table_auto crop=None image=D:\yw\gx-ocr\ocr-page\data\ocr_runs\dual\20261013_163431_488\left.jpg
+2026-10-13 16:35:31,440 [INFO] app.backend.ocr_bridge: 日期 OCR 成功 date=2026-09-24 conf=3 reason=full_ymd_auto_locate#0 crop=[0.28, 0.2653, 0.6002, 0.3254] image=D:\yw\gx-ocr\ocr-page\data\ocr_runs\dual\20261013_163431_488\right.jpg
+2026-10-13 16:35:31,442 [INFO] app.backend.ocr_bridge: OCR 识别 #0 layout=dual scale=2.0 min_confidence=0.3 label=table_auto crop=None image=D:\yw\gx-ocr\ocr-page\data\ocr_runs\dual\20261013_163431_488\right.jpg
+2026-10-13 16:36:05,699 [INFO] app.backend.ocr_bridge: OCR 候选 #0 score=(7, 3, 107, -0.41580000000000006) headers=7 ocr_ms=45261 head=['00:15', '00:30']…['01:30', '01:45']
+2026-10-13 16:36:05,700 [INFO] app.backend.ocr_bridge: OCR 识别 #1 layout=dual scale=2.0 min_confidence=0.3 label=table_fixed crop=(0.02, 0.52, 0.97, 0.9) image=D:\yw\gx-ocr\ocr-page\data\ocr_runs\dual\20261013_163431_488\left.jpg
+2026-10-13 16:36:11,335 [INFO] app.backend.ocr_bridge: OCR 候选 #0 score=(10, 3, 109, -0.41580000000000006) headers=10 ocr_ms=39407 head=['10:15', '10:30']…['12:15', '12:30']
+2026-10-13 16:36:11,335 [INFO] app.backend.ocr_bridge: OCR 识别 #1 layout=dual scale=2.0 min_confidence=0.3 label=table_fixed crop=(0.03, 0.52, 1.0, 0.9) image=D:\yw\gx-ocr\ocr-page\data\ocr_runs\dual\20261013_163431_488\right.jpg
+2026-10-13 16:36:43,771 [INFO] app.backend.ocr_bridge: OCR 候选 #1 score=(9, 3, 109, -0.3686) headers=9 ocr_ms=32138 head=['10:15', '10:30']…['12:00', '12:15']
+2026-10-13 16:36:43,789 [INFO] app.backend.excel_export: excel.enabled=false，跳过导出
+2026-10-13 16:36:46,280 [INFO] app.backend.ocr_bridge: OCR 候选 #1 score=(7, 3, 107, -0.361) headers=7 ocr_ms=40273 head=['00:15', '00:30']…['01:30', '01:45']
+2026-10-13 16:36:46,297 [INFO] app.backend.excel_export: excel.enabled=false，跳过导出
+INFO:     127.0.0.1:62804 - "POST /api/ocr/dual/upload HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62804 - "GET /data/ocr_runs/dual/20261013_163431_488/00_source.jpg?t=1791880606404 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63140 - "GET /data/ocr_runs/dual/20261013_163431_488/left.jpg?t=1791880606404 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63141 - "GET /data/ocr_runs/dual/20261013_163431_488/right.jpg?t=1791880606404 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62804 - "GET /data/ocr_runs/dual/20261013_163431_488/00_monitor.jpg?t=1791880606405 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64818 - "GET /dual HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64818 - "GET /api/config/view HTTP/1.1" 200 OK
+INFO:     127.0.0.1:51306 - "GET /debug HTTP/1.1" 200 OK
+INFO:     127.0.0.1:51306 - "GET /api/config/view HTTP/1.1" 200 OK
+INFO:     127.0.0.1:51306 - "GET /api/config/pi HTTP/1.1" 200 OK
+INFO:     127.0.0.1:51306 - "GET /debug HTTP/1.1" 200 OK
+INFO:     127.0.0.1:51306 - "GET /api/config/view HTTP/1.1" 200 OK
+INFO:     127.0.0.1:51306 - "GET /api/config/pi HTTP/1.1" 200 OK
+2026-10-14 09:25:45,021 [ERROR] app.backend.scheduler: 定时调度热加载配置失败
+Traceback (most recent call last):
+  File "D:\yw\gx-ocr\ocr-page\app\backend\scheduler.py", line 183, in _loop
+  File "D:\yw\gx-ocr\ocr-page\app\backend\config.py", line 24, in load_config
+FileNotFoundError: [Errno 2] No such file or directory: 'D:\\yw\\gx-ocr\\ocr-page\\config.yaml'
+2026-10-14 09:25:50,053 [ERROR] app.backend.scheduler: 定时调度热加载配置失败
+Traceback (most recent call last):
+  File "D:\yw\gx-ocr\ocr-page\app\backend\scheduler.py", line 183, in _loop
+  File "D:\yw\gx-ocr\ocr-page\app\backend\config.py", line 24, in load_config
+FileNotFoundError: [Errno 2] No such file or directory: 'D:\\yw\\gx-ocr\\ocr-page\\config.yaml'
+2026-10-14 09:25:55,070 [ERROR] app.backend.scheduler: 定时调度热加载配置失败
+Traceback (most recent call last):
+  File "D:\yw\gx-ocr\ocr-page\app\backend\scheduler.py", line 183, in _loop
+  File "D:\yw\gx-ocr\ocr-page\app\backend\config.py", line 24, in load_config
+FileNotFoundError: [Errno 2] No such file or directory: 'D:\\yw\\gx-ocr\\ocr-page\\config.yaml'
+2026-10-14 09:26:00,085 [ERROR] app.backend.scheduler: 定时调度热加载配置失败
+Traceback (most recent call last):
+  File "D:\yw\gx-ocr\ocr-page\app\backend\scheduler.py", line 183, in _loop
+  File "D:\yw\gx-ocr\ocr-page\app\backend\config.py", line 24, in load_config
+FileNotFoundError: [Errno 2] No such file or directory: 'D:\\yw\\gx-ocr\\ocr-page\\config.yaml'
+2026-10-14 09:26:05,120 [ERROR] app.backend.scheduler: 定时调度热加载配置失败
+Traceback (most recent call last):
+  File "D:\yw\gx-ocr\ocr-page\app\backend\scheduler.py", line 183, in _loop
+  File "D:\yw\gx-ocr\ocr-page\app\backend\config.py", line 24, in load_config
+FileNotFoundError: [Errno 2] No such file or directory: 'D:\\yw\\gx-ocr\\ocr-page\\config.yaml'
+2026-10-14 09:26:10,140 [ERROR] app.backend.scheduler: 定时调度热加载配置失败
+Traceback (most recent call last):
+  File "D:\yw\gx-ocr\ocr-page\app\backend\scheduler.py", line 183, in _loop
+  File "D:\yw\gx-ocr\ocr-page\app\backend\config.py", line 24, in load_config
+FileNotFoundError: [Errno 2] No such file or directory: 'D:\\yw\\gx-ocr\\ocr-page\\config.yaml'
+2026-10-14 09:26:15,145 [ERROR] app.backend.scheduler: 定时调度热加载配置失败
+Traceback (most recent call last):
+  File "D:\yw\gx-ocr\ocr-page\app\backend\scheduler.py", line 183, in _loop
+  File "D:\yw\gx-ocr\ocr-page\app\backend\config.py", line 24, in load_config
+FileNotFoundError: [Errno 2] No such file or directory: 'D:\\yw\\gx-ocr\\ocr-page\\config.yaml'
+2026-10-14 09:26:20,155 [ERROR] app.backend.scheduler: 定时调度热加载配置失败
+Traceback (most recent call last):
+  File "D:\yw\gx-ocr\ocr-page\app\backend\scheduler.py", line 183, in _loop
+  File "D:\yw\gx-ocr\ocr-page\app\backend\config.py", line 24, in load_config
+FileNotFoundError: [Errno 2] No such file or directory: 'D:\\yw\\gx-ocr\\ocr-page\\config.yaml'
+2026-10-14 09:26:25,169 [ERROR] app.backend.scheduler: 定时调度热加载配置失败
+Traceback (most recent call last):
+  File "D:\yw\gx-ocr\ocr-page\app\backend\scheduler.py", line 183, in _loop
+  File "D:\yw\gx-ocr\ocr-page\app\backend\config.py", line 24, in load_config
+FileNotFoundError: [Errno 2] No such file or directory: 'D:\\yw\\gx-ocr\\ocr-page\\config.yaml'
+2026-10-14 09:26:30,175 [ERROR] app.backend.scheduler: 定时调度热加载配置失败
+Traceback (most recent call last):
+  File "D:\yw\gx-ocr\ocr-page\app\backend\scheduler.py", line 183, in _loop
+  File "D:\yw\gx-ocr\ocr-page\app\backend\config.py", line 24, in load_config
+FileNotFoundError: [Errno 2] No such file or directory: 'D:\\yw\\gx-ocr\\ocr-page\\config.yaml'
+2026-10-14 09:26:35,188 [ERROR] app.backend.scheduler: 定时调度热加载配置失败
+Traceback (most recent call last):
+  File "D:\yw\gx-ocr\ocr-page\app\backend\scheduler.py", line 183, in _loop
+  File "D:\yw\gx-ocr\ocr-page\app\backend\config.py", line 24, in load_config
+FileNotFoundError: [Errno 2] No such file or directory: 'D:\\yw\\gx-ocr\\ocr-page\\config.yaml'
+2026-10-14 09:26:40,201 [ERROR] app.backend.scheduler: 定时调度热加载配置失败
+Traceback (most recent call last):
+  File "D:\yw\gx-ocr\ocr-page\app\backend\scheduler.py", line 183, in _loop
+  File "D:\yw\gx-ocr\ocr-page\app\backend\config.py", line 24, in load_config
+FileNotFoundError: [Errno 2] No such file or directory: 'D:\\yw\\gx-ocr\\ocr-page\\config.yaml'
+2026-10-14 09:26:45,209 [ERROR] app.backend.scheduler: 定时调度热加载配置失败
+Traceback (most recent call last):
+  File "D:\yw\gx-ocr\ocr-page\app\backend\scheduler.py", line 183, in _loop
+  File "D:\yw\gx-ocr\ocr-page\app\backend\config.py", line 24, in load_config
+FileNotFoundError: [Errno 2] No such file or directory: 'D:\\yw\\gx-ocr\\ocr-page\\config.yaml'
+2026-10-14 09:26:50,223 [ERROR] app.backend.scheduler: 定时调度热加载配置失败
+Traceback (most recent call last):
+  File "D:\yw\gx-ocr\ocr-page\app\backend\scheduler.py", line 183, in _loop
+  File "D:\yw\gx-ocr\ocr-page\app\backend\config.py", line 24, in load_config
+FileNotFoundError: [Errno 2] No such file or directory: 'D:\\yw\\gx-ocr\\ocr-page\\config.yaml'
+2026-10-14 09:26:55,234 [ERROR] app.backend.scheduler: 定时调度热加载配置失败
+Traceback (most recent call last):
+  File "D:\yw\gx-ocr\ocr-page\app\backend\scheduler.py", line 183, in _loop
+  File "D:\yw\gx-ocr\ocr-page\app\backend\config.py", line 24, in load_config
+FileNotFoundError: [Errno 2] No such file or directory: 'D:\\yw\\gx-ocr\\ocr-page\\config.yaml'
+2026-10-14 09:27:00,249 [ERROR] app.backend.scheduler: 定时调度热加载配置失败
+Traceback (most recent call last):
+  File "D:\yw\gx-ocr\ocr-page\app\backend\scheduler.py", line 183, in _loop
+  File "D:\yw\gx-ocr\ocr-page\app\backend\config.py", line 24, in load_config
+FileNotFoundError: [Errno 2] No such file or directory: 'D:\\yw\\gx-ocr\\ocr-page\\config.yaml'
+2026-10-14 09:27:05,256 [ERROR] app.backend.scheduler: 定时调度热加载配置失败
+Traceback (most recent call last):
+  File "D:\yw\gx-ocr\ocr-page\app\backend\scheduler.py", line 183, in _loop
+  File "D:\yw\gx-ocr\ocr-page\app\backend\config.py", line 24, in load_config
+FileNotFoundError: [Errno 2] No such file or directory: 'D:\\yw\\gx-ocr\\ocr-page\\config.yaml'
+2026-10-14 09:27:10,266 [ERROR] app.backend.scheduler: 定时调度热加载配置失败
+Traceback (most recent call last):
+  File "D:\yw\gx-ocr\ocr-page\app\backend\scheduler.py", line 183, in _loop
+  File "D:\yw\gx-ocr\ocr-page\app\backend\config.py", line 24, in load_config
+FileNotFoundError: [Errno 2] No such file or directory: 'D:\\yw\\gx-ocr\\ocr-page\\config.yaml'
+2026-10-14 09:27:15,273 [ERROR] app.backend.scheduler: 定时调度热加载配置失败
+Traceback (most recent call last):
+  File "D:\yw\gx-ocr\ocr-page\app\backend\scheduler.py", line 183, in _loop
+  File "D:\yw\gx-ocr\ocr-page\app\backend\config.py", line 24, in load_config
+FileNotFoundError: [Errno 2] No such file or directory: 'D:\\yw\\gx-ocr\\ocr-page\\config.yaml'
+2026-10-14 09:27:20,286 [ERROR] app.backend.scheduler: 定时调度热加载配置失败
+Traceback (most recent call last):
+  File "D:\yw\gx-ocr\ocr-page\app\backend\scheduler.py", line 183, in _loop
+  File "D:\yw\gx-ocr\ocr-page\app\backend\config.py", line 24, in load_config
+FileNotFoundError: [Errno 2] No such file or directory: 'D:\\yw\\gx-ocr\\ocr-page\\config.yaml'
+2026-10-14 09:27:25,306 [ERROR] app.backend.scheduler: 定时调度热加载配置失败
+Traceback (most recent call last):
+  File "D:\yw\gx-ocr\ocr-page\app\backend\scheduler.py", line 183, in _loop
+  File "D:\yw\gx-ocr\ocr-page\app\backend\config.py", line 24, in load_config
+FileNotFoundError: [Errno 2] No such file or directory: 'D:\\yw\\gx-ocr\\ocr-page\\config.yaml'
