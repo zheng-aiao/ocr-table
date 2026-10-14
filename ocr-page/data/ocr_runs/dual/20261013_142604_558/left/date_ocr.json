@@ -1,0 +1,173 @@
+{
+  "ok": false,
+  "base_date": null,
+  "date_source": "failed",
+  "date_ocr": {
+    "ok": false,
+    "date_str": null,
+    "raw_texts": [
+      "L贝",
+      "新平#61一实时电能市场发布信息",
+      "JX",
+      "新平61一实时电能市场发布信息",
+      "新华61一实时电能市场发布信息",
+      "贝",
+      "市",
+      "JX",
+      "新平61一实时电能市场发布信息",
+      "贝",
+      "JX",
+      "新平#61一实时电能市场发布信息",
+      "时电能市场发布信息",
+      "JX",
+      "时电能市场发布信息",
+      "时电能市场发布信息",
+      "JX",
+      "时电能市场发布信息",
+      "时电能市场发布信息",
+      "现货生产信息申报系",
+      "新华61一实时电能市场发布信息",
+      "202009",
+      "现货生产信息申报系",
+      "济华161一实时电能市场发布信息"
+    ],
+    "crop": [
+      0.0,
+      0.16,
+      0.48,
+      0.26
+    ],
+    "image_path": "D:\\yw\\gx-ocr\\ocr-page\\data\\ocr_runs\\dual\\20261013_142604_558\\left\\date_crop_cfg.jpg",
+    "best_image_path": "",
+    "candidate_image_paths": [
+      "D:\\yw\\gx-ocr\\ocr-page\\data\\ocr_runs\\dual\\20261013_142604_558\\left\\date_crop_cfg.jpg",
+      "D:\\yw\\gx-ocr\\ocr-page\\data\\ocr_runs\\dual\\20261013_142604_558\\left\\date_crop_cfg_enlarge_01.jpg"
+    ],
+    "reason": "date_not_found",
+    "attempts": [
+      {
+        "crop": [
+          0.0,
+          0.16,
+          0.48,
+          0.26
+        ],
+        "texts": [
+          "L贝",
+          "新平#61一实时电能市场发布信息",
+          "JX",
+          "新平61一实时电能市场发布信息",
+          "新华61一实时电能市场发布信息",
+          "贝",
+          "市",
+          "JX",
+          "新平61一实时电能市场发布信息",
+          "贝",
+          "JX",
+          "新平#61一实时电能市场发布信息"
+        ],
+        "ok": false,
+        "enhance": false,
+        "phase": 0,
+        "stage": "config_fallback",
+        "crop_index": 0,
+        "local_index": 0,
+        "image_path": "D:\\yw\\gx-ocr\\ocr-page\\data\\ocr_runs\\dual\\20261013_142604_558\\left\\date_crop_cfg.jpg"
+      },
+      {
+        "crop": [
+          0.0,
+          0.13,
+          0.52,
+          0.3
+        ],
+        "texts": [
+          "现货生产信息申报系",
+          "新华61一实时电能市场发布信息",
+          "202009",
+          "现货生产信息申报系",
+          "济华161一实时电能市场发布信息",
+          "三",
+          "202608",
+          "现货生产信息申报系",
+          "新平161一实时电能市场发布信息",
+          "2026-08",
+          "现货生产信息申报系",
+          "新平161一实时电能市场发布信息"
+        ],
+        "ok": false,
+        "enhance": false,
+        "phase": 0,
+        "stage": "config_fallback",
+        "crop_index": 1,
+        "local_index": 1,
+        "image_path": "D:\\yw\\gx-ocr\\ocr-page\\data\\ocr_runs\\dual\\20261013_142604_558\\left\\date_crop_cfg_enlarge_01.jpg"
+      },
+      {
+        "crop": [
+          0.0,
+          0.16,
+          0.48,
+          0.26
+        ],
+        "texts": [
+          "L贝",
+          "新平#61一实时电能市场发布信息",
+          "JX",
+          "新平61一实时电能市场发布信息",
+          "新华61一实时电能市场发布信息",
+          "贝",
+          "市",
+          "JX",
+          "新平61一实时电能市场发布信息",
+          "贝",
+          "JX",
+          "新平#61一实时电能市场发布信息"
+        ],
+        "ok": false,
+        "enhance": true,
+        "phase": 0,
+        "stage": "config_fallback",
+        "crop_index": 0,
+        "local_index": 0,
+        "image_path": "D:\\yw\\gx-ocr\\ocr-page\\data\\ocr_runs\\dual\\20261013_142604_558\\left\\date_crop_cfg.jpg"
+      },
+      {
+        "crop": [
+          0.0,
+          0.13,
+          0.52,
+          0.3
+        ],
+        "texts": [
+          "现货生产信息申报系",
+          "新华61一实时电能市场发布信息",
+          "202009",
+          "现货生产信息申报系",
+          "济华161一实时电能市场发布信息",
+          "三",
+          "202608",
+          "现货生产信息申报系",
+          "新平161一实时电能市场发布信息",
+          "2026-08",
+          "现货生产信息申报系",
+          "新平161一实时电能市场发布信息"
+        ],
+        "ok": false,
+        "enhance": true,
+        "phase": 0,
+        "stage": "config_fallback",
+        "crop_index": 1,
+        "local_index": 1,
+        "image_path": "D:\\yw\\gx-ocr\\ocr-page\\data\\ocr_runs\\dual\\20261013_142604_558\\left\\date_crop_cfg_enlarge_01.jpg"
+      }
+    ],
+    "locate": {
+      "ok": false
+    },
+    "message": "未识别到左上角日期筛选框中的业务日期，已跳过表格 OCR；OCR 原文：L贝 / 新平#61一实时电能市场发布信息 / JX / 新平61一实时电能市场发布信息 / 新华61一实时电能市场发布信息 / 贝 / 市 / JX"
+  },
+  "reason": "date_not_found",
+  "message": "未识别到左上角日期筛选框中的业务日期，已跳过表格 OCR；OCR 原文：L贝 / 新平#61一实时电能市场发布信息 / JX / 新平61一实时电能市场发布信息 / 新华61一实时电能市场发布信息 / 贝 / 市 / JX",
+  "table_ocr_skipped": true
+}

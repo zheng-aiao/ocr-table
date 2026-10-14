@@ -1,0 +1,42 @@
+{
+  "ok": true,
+  "crop": [
+    0.0,
+    0.0,
+    1.0,
+    1.0
+  ],
+  "mode": "full",
+  "ms": 240,
+  "detail": {
+    "probe_wh": [
+      800,
+      600
+    ],
+    "src_wh": [
+      2560,
+      1920
+    ],
+    "energy": null,
+    "bright": [
+      0.0,
+      0.0,
+      1.0,
+      1.0
+    ],
+    "chosen_score": 0.0,
+    "candidates": [
+      {
+        "mode": "bright",
+        "crop": [
+          0.0,
+          0.0,
+          1.0,
+          1.0
+        ],
+        "score": 0.0
+      }
+    ]
+  },
+  "enabled": true
+}

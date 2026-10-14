@@ -1,0 +1,8 @@
+# Python virtual environments / local Python installs
+.venv/
+python/
+
+# Python bytecode / runtime logs
+__pycache__/
+*.pyc
+*.log

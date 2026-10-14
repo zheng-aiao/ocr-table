@@ -1,0 +1,116 @@
+# 珙县抓拍 OCR → PI Demo 配置
+
+camera:
+  # DS-2CD6855FWD-PL
+  host: "192.168.1.64"
+  port: 80
+  user: "admin"
+  password: "Sdyw@192"
+  # ISAPI 流通道：物理通道1 主码流写 1 或 101；「通道个数=1」≠ 只能填 channel=1
+  channel: "101"
+  timeout_sec: 15
+
+capture:
+  dir: "data/captures"
+  # mode 与下方块名对应：single | dual
+  mode: dual
+  # 定时处置：开启后立刻跑一轮，之后每隔 interval_minutes 再跑
+  # 到点若上一轮未完成则跳过，等下一个间隔；跟随上方 mode
+  # 文件落盘：data/captures/YYYYMMDD/H-MM.jpg（如 9-09.jpg、10-20.jpg；同分钟重复加 _2）
+  schedule:
+    enabled: false          # true 开启定时
+    interval_minutes: 15    # 间隔（分钟）
+  # 单屏：测点前缀 → _1…_N
+  # table_crop：半屏/整图内表格固定比例（x0,y0,x1,y1）；auto 失败时回退竞选
+  # date_crop：日期 OCR 回退框（可留空）；优先自动找「日期」+右侧筛选框
+  single:
+    tag: "GX.DEMO.OCR"
+    crop: ""
+    # 未写时跟随 dual.auto_monitor；宽贴满/上下有环境时先裁屏再 OCR
+    # auto_monitor: true
+    table_crop: "0.10,0.52,0.995,0.90"
+    date_crop: "0.14,0.10,0.48,0.26"
+  # 双屏两机组：各自独立 OCR / 业务日期（左上角日期 OCR）/ 测点前缀
+  # 现场左窗更大、右窗更窄：dual.*.crop 为整图分屏比例（auto_seam 失败时回退）
+  # auto_seam：自动找左右窗竖缝（右压左看导航栏，左压右看窗边），通常 <50ms
+  # table_crop 相对半屏图；底边勿到 0.97（易吃进 Windows 任务栏）
+  # date_crop 相对半屏图（回退用）
+  dual:
+    # 先裁显示器区域再左右分缝：远景四周有环境 / 近景宽贴满但上下仍有墙桌时建议开启
+    # 失败或已近满屏则回退整图；产物：data/ocr_runs/dual/<ts>/00_monitor.jpg、monitor.json
+    auto_monitor: true
+    auto_seam: true
+    seam_fallback: 0.55
+    seam_gap: 0.012
+    left:
+      id: "61"
+      title: "新平#61"
+      crop: "0,0,0.545,1"
+      table_crop: "0.02,0.52,0.97,0.90"
+      tag: "GX.DEMO.OCR.L"
+      date_crop: "0.0,0.16,0.48,0.26"
+    right:
+      id: "62"
+      title: "新平#62"
+      crop: "0.555,0,1,1"
+      table_crop: "0.03,0.52,1.0,0.90"
+      tag: "GX.DEMO.OCR.R"
+      date_crop: "0.0,0.16,0.48,0.26"
+
+ocr:
+  # 表格 OCR 引擎目录（默认 app/ocr_engine/，随 app 打包）
+  workdir: "app/ocr_engine"
+  # 放大倍数：2.0 偏速度；要更准可改 2.5（像素面积约 +56%，更慢）
+  scale: 2.0
+  # 放大后最大宽度；限制大图耗时
+  max_ocr_width: 4800
+  min_confidence: 0.3
+  # 本轮有效点数低于此值视为识别失败（切屏/熄屏/模糊等），不写 PI，等下一轮
+  min_points: 8
+  # 表格候选顺序：先 table_auto（蓝底+扩边），异常再回退 table_fixed。
+  # 两路裁完后都纠偏再 OCR（斜拍时 fixed 同样纠偏）。
+  # early_stop=true 时：仅当 auto 三行数据格全部填满（100%）才跳过 fixed
+  early_stop: true
+  early_stop_min_density: 100
+  # 双屏左右并行（缩短墙钟；与 onnx_threads 叠加会占更多核）
+  parallel_sides: true
+  # ONNX 每会话 CPU 线程数（默认 2）。不设或过大时 RapidOCR 会占满全部核心，
+  # 识别期间整机卡顿、Chrome 打开网页极慢。现场机器核少可改 1；核多可试 4。
+  onnx_threads: 2
+  # 业务日：优先 OCR 定位「日期」标签再认右侧筛选框（date_auto_locate）；失败才用 date_crop
+  # 写 PI 日期相对 OCR 识别日提前的天数：1=提前一天，0=当天（不提前）
+  pi_date_back_days: 1
+  date_auto_locate: true
+  # OCR 过程中间文件目录（始终落盘）：data/ocr_runs/single|dual/<时间戳>/
+  artifacts_dir: "data/ocr_runs"
+  # 履历「预计值」默认 = 本屏 OCR 数据行数 × 时间刻度列数（左右各自计算）
+  # 表体固定 1 行时刻表头 + 3 行数据；表头以纯 OCR 的 Δ=15 锚段为准，左右缺列按数据跨度推导
+  # 若需固定覆盖可写：expected_cells: 288
+  # 同行量级清洗：仅整数为主的电力/计划行用比值规则置空异常格。
+  # 已去掉「位数众数」硬删（电价尖峰跨位数必然误杀）；电价行（小数为主）不清洗。
+  sanitize:
+    enabled: true         # false 关闭清洗
+    min_samples: 4        # 有效数值少于此不清洗
+    ratio_k: 3.0          # 相对同行中位数倍数，超出则置空（仅整数行）
+
+# OCR 结果 Excel 备份（开发对照；写 PI 不读 Excel）
+excel:
+  enabled: false
+  dir: "data/exports"
+  filename: "{stem}_{ts}.xlsx"
+
+pi:
+  # 连接信息；写入固定「一行数据 → 前缀_1…_N」，测点见 capture.single.tag / capture.dual.*.tag
+  # DLL 放 app/pidll/，随 app 打包（相对路径相对项目根）
+  dll_dir: "app/pidll"
+  dll_name: "piapi.dll"
+  server: "192.168.2.230"
+  user: "piadmin"
+  password: "Hdpi-6018"
+  curve_count: 96
+  # 写后按时刻回读校验；关掉会更快，但早于建点时间时可能假成功
+  verify_write: true
+
+server:
+  host: "127.0.0.1"
+  port: 8088

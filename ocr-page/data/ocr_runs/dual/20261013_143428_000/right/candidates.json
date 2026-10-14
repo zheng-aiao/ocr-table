@@ -1,0 +1,70 @@
+[
+  {
+    "index": 0,
+    "label": "table_auto",
+    "name": "cand_table_auto",
+    "crop": null,
+    "status": "invalid",
+    "reason": "未识别到有效表头/数据行，视为无效候选",
+    "score": [
+      -1,
+      -1,
+      -1,
+      null
+    ],
+    "headers": [],
+    "rows": [],
+    "point_count": 0,
+    "image_path": "D:\\yw\\gx-ocr\\ocr-page\\data\\ocr_runs\\dual\\20261013_143428_000\\right\\cand_table_auto.jpg",
+    "ocr_ms": 14099,
+    "invalid": true
+  },
+  {
+    "index": 1,
+    "label": "table_fixed",
+    "name": "cand_table_fixed",
+    "crop": [
+      0.03,
+      0.52,
+      1.0,
+      0.9
+    ],
+    "status": "winner",
+    "reason": "综合最优（cand_table_fixed）：表头质量=4，实心行=3，密度=104；同分时优先更紧裁剪",
+    "score": [
+      4,
+      3,
+      104,
+      0.3686
+    ],
+    "headers": [
+      "16:15",
+      "16:30",
+      "16:45",
+      "17:00"
+    ],
+    "rows": [
+      [
+        "280",
+        "280",
+        "280",
+        "280"
+      ],
+      [
+        "280",
+        "280",
+        "280",
+        "280"
+      ],
+      [
+        "3.439",
+        "852.87",
+        "93.756",
+        "66.018"
+      ]
+    ],
+    "point_count": 12,
+    "image_path": "D:\\yw\\gx-ocr\\ocr-page\\data\\ocr_runs\\dual\\20261013_143428_000\\right\\cand_table_fixed.jpg",
+    "ocr_ms": 26755
+  }
+]

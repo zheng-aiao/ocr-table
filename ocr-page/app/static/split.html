@@ -1,0 +1,675 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>现货 · 双屏模拟</title>
+  <script src="https://cdn.jsdelivr.net/npm/echarts@5.5.0/dist/echarts.min.js"></script>
+  <style>
+    :root {
+      --green: #1f6b45;
+      --green-dark: #165536;
+      --title: #1f3d2a;
+      --text: #334155;
+      --muted: #6b7c93;
+      --line: #d5dde6;
+      --accent: #2f6fed;
+      --ok: #1a7f4b;
+      --err: #c62828;
+      --table-header: #f2f3f5;
+      --table-row: #d6e6f2;
+      --table-border: #c5ced9;
+    }
+    * { box-sizing: border-box; }
+    html, body {
+      margin: 0;
+      height: 100%;
+      font-family: "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+      background: #2b2f33;
+      color: var(--text);
+    }
+    .nav {
+      height: 44px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 0 14px;
+      background: #1c1f23;
+      color: #c9d2dc;
+      font-size: 12px;
+    }
+    .nav-left {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      min-width: 0;
+    }
+    .nav-left a { color: #8ec5ff; text-decoration: none; white-space: nowrap; }
+    .nav-actions {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-shrink: 0;
+    }
+    .nav-actions button {
+      border: 0;
+      border-radius: 6px;
+      padding: 7px 14px;
+      font-size: 13px;
+      font-weight: 600;
+      cursor: pointer;
+      background: var(--accent);
+      color: #fff;
+    }
+    .nav-actions button.secondary {
+      background: #2a3138;
+      color: #e8eef5;
+      border: 1px solid #3d4752;
+    }
+    .nav-actions button:disabled { opacity: 0.55; cursor: not-allowed; }
+    .nav-status {
+      max-width: 280px;
+      font-size: 12px;
+      color: #9aa8bd;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .nav-status.ok { color: #5ddea0; }
+    .nav-status.err { color: #f07178; }
+    .stage {
+      height: calc(100% - 44px);
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 6px;
+      padding: 6px;
+    }
+    .monitor {
+      min-width: 0;
+      min-height: 0;
+      background: #fff;
+      display: grid;
+      grid-template-rows: 46px 1fr;
+      grid-template-columns: 52px 1fr;
+      overflow: hidden;
+      box-shadow: 0 8px 24px rgba(0,0,0,.28);
+    }
+    .sys-bar {
+      grid-column: 1 / -1;
+      background: var(--green);
+      color: #fff;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 16px 0 14px;
+      font-size: 20px;
+      font-weight: 650;
+      letter-spacing: .04em;
+    }
+    .sys-bar .right {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      font-size: 13px;
+      font-weight: 500;
+      opacity: .92;
+    }
+    .side { background: var(--green-dark); }
+    .page {
+      min-width: 0;
+      min-height: 0;
+      background: #f4f6f8;
+      display: flex;
+      flex-direction: column;
+      padding: 0 14px;
+      overflow: hidden;
+    }
+    /* 标题+日期 10% · 图表 40% · 间隙 10% · 表格区 40% */
+    .page-head {
+      flex: 0 0 10%;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      align-items: flex-start;
+      gap: 10px;
+      min-height: 0;
+    }
+    .page-title {
+      margin: 0;
+      font-size: 15px;
+      font-weight: 700;
+      color: var(--title);
+    }
+    .date-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .date-row label { font-size: 13px; color: #4b5563; }
+    .date-row input[type="date"] {
+      border: 1px solid #cfd8e3;
+      background: #fff;
+      padding: 3px 6px;
+      font-size: 13px;
+      color: #334155;
+    }
+    .chart-card {
+      flex: 0 0 40%;
+      min-height: 0;
+      background: #fff;
+      border: 1px solid var(--line);
+      padding: 4px 6px 0;
+    }
+    .chart { width: 100%; height: 100%; }
+    .page-gap {
+      flex: 0 0 10%;
+      min-height: 0;
+    }
+    /* 表格区域占 40%：表本身按内容高度，下方留白（原图未撑满） */
+    .table-zone {
+      flex: 0 0 40%;
+      min-height: 0;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+    .table-card {
+      flex: 0 0 auto;
+      max-height: 70%;
+      background: #fff;
+      border: 1px solid var(--line);
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+    .table-wrap {
+      overflow-x: auto;
+      overflow-y: hidden;
+    }
+    table {
+      border-collapse: collapse;
+      width: max-content;
+      min-width: 100%;
+      font-size: 12px;
+    }
+    th, td {
+      border: 1px solid var(--table-border);
+      padding: 8px 10px;
+      white-space: nowrap;
+      text-align: center;
+    }
+    thead th {
+      background: var(--table-header);
+      font-weight: 600;
+      color: #3a4658;
+    }
+    tbody td { background: var(--table-row); }
+    th:first-child, td:first-child {
+      position: sticky;
+      left: 0;
+      z-index: 1;
+      min-width: 132px;
+      text-align: center;
+    }
+    thead th:first-child { background: var(--table-header); }
+    tbody td:first-child { background: var(--table-row); }
+    .pager {
+      flex: 0 0 auto;
+      font-size: 12px;
+      color: #6b7280;
+      padding: 6px 10px 8px;
+      background: #fff;
+    }
+    .table-zone-fill {
+      flex: 1 1 auto;
+      min-height: 0;
+      background: #f4f6f8;
+    }
+    @media (max-width: 1100px) {
+      .stage { grid-template-columns: 1fr; height: auto; }
+      .monitor { min-height: 760px; }
+    }
+  </style>
+</head>
+<body>
+  <div class="nav">
+    <div class="nav-left">
+      <span>双屏 · 左右两栏对应现场两个标签页（OCR+写库）</span>
+      <a href="/">履历首页</a>
+      <a href="/debug">联调</a>
+    </div>
+    <div class="nav-actions">
+      <span id="status" class="nav-status">就绪</span>
+      <button class="secondary" id="btnCapture" type="button">抓拍</button>
+      <button class="secondary" id="btnNextData" type="button">换数</button>
+      <button id="btnRun" type="button">分析</button>
+    </div>
+  </div>
+
+  <div class="stage">
+    <article class="monitor" data-screen="61">
+      <div class="sys-bar">
+        <span>现货生产信息申报系统</span>
+        <span class="right"><span>调令信息</span><span>新平</span></span>
+      </div>
+      <div class="side"></div>
+      <div class="page">
+        <div class="page-head">
+          <h1 class="page-title" id="title61">新平#61-实时电能市场发布信息</h1>
+          <div class="date-row">
+            <label for="date61">日期</label>
+            <input id="date61" type="date" />
+          </div>
+        </div>
+        <div class="chart-card"><div id="chart61" class="chart"></div></div>
+        <div class="page-gap" aria-hidden="true"></div>
+        <div class="table-zone">
+          <div class="table-card">
+            <div class="table-wrap">
+              <table>
+                <thead id="thead61"></thead>
+                <tbody id="tbody61"></tbody>
+              </table>
+            </div>
+            <div class="pager" id="pager61">显示第 1 到第 3 条记录，总共 3 条记录</div>
+          </div>
+          <div class="table-zone-fill" aria-hidden="true"></div>
+        </div>
+      </div>
+    </article>
+
+    <article class="monitor" data-screen="62">
+      <div class="sys-bar">
+        <span>现货生产信息申报系统</span>
+        <span class="right"><span>主页</span><span>页面发布</span></span>
+      </div>
+      <div class="side"></div>
+      <div class="page">
+        <div class="page-head">
+          <h1 class="page-title" id="title62">新平#62-实时电能市场发布信息</h1>
+          <div class="date-row">
+            <label for="date62">日期</label>
+            <input id="date62" type="date" />
+          </div>
+        </div>
+        <div class="chart-card"><div id="chart62" class="chart"></div></div>
+        <div class="page-gap" aria-hidden="true"></div>
+        <div class="table-zone">
+          <div class="table-card">
+            <div class="table-wrap">
+              <table>
+                <thead id="thead62"></thead>
+                <tbody id="tbody62"></tbody>
+              </table>
+            </div>
+            <div class="pager" id="pager62">显示第 1 到第 3 条记录，总共 3 条记录</div>
+          </div>
+          <div class="table-zone-fill" aria-hidden="true"></div>
+        </div>
+      </div>
+    </article>
+  </div>
+
+  <script>
+    const ROW_NAMES = ["省内实时中标电力", "实时发电计划", "省内实时中标电价"];
+    const COLORS = ["#7eb8d8", "#3cb371", "#2f6fed"];
+
+    function pad(n) { return String(n).padStart(2, "0"); }
+
+    function headers() {
+      const out = [];
+      for (let i = 1; i <= 96; i++) {
+        const mins = i * 15;
+        const hh = Math.floor(mins / 60);
+        const mm = mins % 60;
+        out.push(hh === 24 ? "24:00" : `${pad(hh)}:${pad(mm)}`);
+      }
+      return out;
+    }
+
+    const HEADERS = headers();
+
+    function zeros() {
+      return HEADERS.map(() => 0);
+    }
+
+    function fillPrice(seed, extra) {
+      return HEADERS.map((_, i) => {
+        if (i < seed.length) return seed[i];
+        const h = (i + 1) * 0.25;
+        const dip = h >= 14 && h <= 16 ? -40 : 0;
+        const peak = h >= 10 && h <= 12 ? 30 : 0;
+        return Math.round((118 + extra + peak + dip + 8 * Math.sin(i / 5)) * 1000) / 1000;
+      });
+    }
+
+    function series(seed, base, amp, wave) {
+      const out = [];
+      for (let i = 0; i < 96; i++) {
+        const t = i / 96;
+        const v = base + amp * Math.sin((t + seed) * Math.PI * wave);
+        out.push(Math.round(v * 1000) / 1000);
+      }
+      return out;
+    }
+
+    // 多套测试数据：换数时同时刷新左右屏表格/曲线，便于 OCR 对照
+    const DATASETS = [
+      {
+        name: "示例 A · 现场风格",
+        left: {
+          rows: [
+            zeros(),
+            zeros(),
+            fillPrice([116.79, 116.79, 93.582, 116.88, 138.755, 116.085, 112.0], 0),
+          ],
+        },
+        right: {
+          rows: [
+            zeros(),
+            zeros(),
+            fillPrice([116.79, 116.79, 93.582, 116.88, 138.755, 116.085, 112.923], 2),
+          ],
+        },
+      },
+      {
+        name: "示例 B · 晚高峰电价",
+        left: {
+          rows: [
+            series(0.0, 0, 0, 1).map(() => 0),
+            series(0.0, 0, 0, 1).map(() => 0),
+            HEADERS.map((_, i) => {
+              const h = i / 4;
+              const peak = h >= 18 && h <= 22 ? 80 : 0;
+              return Math.round((320 + peak + 20 * Math.sin(i / 5)) * 1000) / 1000;
+            }),
+          ],
+        },
+        right: {
+          rows: [
+            series(0.1, 8, 4, 2),
+            series(0.2, 5, 3, 3),
+            HEADERS.map((_, i) => {
+              const h = i / 4;
+              const peak = h >= 18 && h <= 22 ? 60 : 0;
+              return Math.round((300 + peak + 15 * Math.sin(i / 6)) * 1000) / 1000;
+            }),
+          ],
+        },
+      },
+      {
+        name: "示例 C · 对照样本",
+        left: {
+          rows: [
+            zeros(),
+            zeros(),
+            HEADERS.map((_, i) => {
+              const sample = [362.381,400,367.824,393.393,394.069,400,400,477.92,470.84,400,395,395,400,400,410,391.947,477.92,410,390,410,395,393,380,387];
+              const idx = HEADERS.indexOf("18:15");
+              if (i >= idx && i - idx < sample.length) return sample[i - idx];
+              return Math.round((350 + 15 * Math.sin(i / 6)) * 1000) / 1000;
+            }),
+          ],
+        },
+        right: {
+          rows: [
+            zeros(),
+            zeros(),
+            HEADERS.map((_, i) => {
+              const sample = [116.79,116.796,93.582,116.88,138.755,116.085,112.923,110.5,108.2,105,120,125,130,128,122,118,115,112,110,108,106,104,102,100];
+              const idx = HEADERS.indexOf("00:15");
+              if (i >= idx && i - idx < sample.length) return sample[i - idx];
+              return Math.round((110 + 12 * Math.sin(i / 7)) * 1000) / 1000;
+            }),
+          ],
+        },
+      },
+    ];
+
+    let dataIndex = 0;
+    const charts = {};
+    const statusEl = document.getElementById("status");
+    const btnCapture = document.getElementById("btnCapture");
+    const btnNext = document.getElementById("btnNextData");
+    const btnRun = document.getElementById("btnRun");
+
+    function setStatus(text, ok) {
+      statusEl.textContent = text;
+      statusEl.className = "nav-status" + (ok === true ? " ok" : ok === false ? " err" : "");
+      statusEl.title = text;
+    }
+
+    function setBusy(busy) {
+      btnCapture.disabled = busy;
+      btnNext.disabled = busy;
+      btnRun.disabled = busy;
+    }
+
+    function current() {
+      return DATASETS[dataIndex];
+    }
+
+    function rowLabel(i, rowTags) {
+      if (rowTags && rowTags[i]) return rowTags[i];
+      return ROW_NAMES[i] || ("行" + (i + 1));
+    }
+
+    function toNumRows(rows) {
+      return (rows || []).map((row) =>
+        (row || []).map((v) => {
+          const n = Number(String(v).replace(/,/g, "").trim());
+          return Number.isFinite(n) ? n : null;
+        })
+      );
+    }
+
+    function renderTable(id, headers, rows, rowTags) {
+      const hs = headers && headers.length ? headers : HEADERS;
+      const rs = rows && rows.length ? rows : [zeros()];
+      const names = rs.map((_, i) => rowLabel(i, rowTags));
+      document.getElementById("thead" + id).innerHTML =
+        "<tr><th>类型</th>" + hs.map((h) => `<th>${h}</th>`).join("") + "</tr>";
+      document.getElementById("tbody" + id).innerHTML = rs.map((row, i) => {
+        const cells = hs.map((_, j) => {
+          const v = row[j];
+          return `<td>${v == null || v === "" ? "" : v}</td>`;
+        }).join("");
+        return `<tr><td>${names[i]}</td>${cells}</tr>`;
+      }).join("");
+      document.getElementById("pager" + id).textContent =
+        `显示第 1 到第 ${rs.length} 条记录，总共 ${rs.length} 条记录`;
+    }
+
+    function renderChart(id, headers, rows, rowTags) {
+      const el = document.getElementById("chart" + id);
+      if (!charts[id]) charts[id] = echarts.init(el);
+      const hs = headers && headers.length ? headers : HEADERS;
+      const numRows = toNumRows(rows);
+      const names = numRows.map((_, i) => rowLabel(i, rowTags));
+      const powerVals = [];
+      const priceVals = [];
+      numRows.forEach((row, i) => {
+        const name = names[i] || "";
+        const isPrice = /电价|price|OCR_\d+$/i.test(name) && i === numRows.length - 1;
+        row.forEach((v) => {
+          if (v == null) return;
+          if (isPrice || i >= 2) priceVals.push(v);
+          else powerVals.push(v);
+        });
+      });
+      const series = numRows.map((row, i) => {
+        const usePriceAxis = i >= 2 || /电价/i.test(names[i] || "");
+        return {
+          name: names[i],
+          type: "line",
+          yAxisIndex: usePriceAxis ? 1 : 0,
+          showSymbol: false,
+          smooth: usePriceAxis,
+          lineStyle: { width: usePriceAxis ? 2 : 1.5 },
+          data: row.map((v) => (v == null ? null : v)),
+        };
+      });
+      charts[id].setOption({
+        color: COLORS,
+        tooltip: { trigger: "axis" },
+        legend: {
+          data: names,
+          top: 0,
+          right: 4,
+          textStyle: { fontSize: 10 },
+          itemWidth: 12,
+          itemHeight: 8,
+        },
+        grid: { left: 42, right: 42, top: 26, bottom: 22 },
+        xAxis: {
+          type: "category",
+          data: hs,
+          axisLabel: { fontSize: 9, interval: 7 },
+          axisLine: { lineStyle: { color: "#c5d0de" } },
+          boundaryGap: false,
+        },
+        yAxis: [
+          {
+            type: "value",
+            name: "单位(MW)",
+            nameTextStyle: { fontSize: 9, color: "#7a8799" },
+            min: 0,
+            max: Math.max(1, ...powerVals, 1),
+            splitLine: { lineStyle: { color: "#eef2f6" } },
+          },
+          {
+            type: "value",
+            name: "单位(元/MWh)",
+            nameTextStyle: { fontSize: 9, color: "#7a8799" },
+            min: 0,
+            max: Math.max(210, ...priceVals, 1),
+            splitLine: { show: false },
+          },
+        ],
+        series,
+      }, true);
+    }
+
+    function renderPane(id, pane) {
+      const headers = pane.headers || HEADERS;
+      const rows = pane.rows || [];
+      const rowTags = pane.row_tags || null;
+      renderTable(id, headers, rows, rowTags);
+      renderChart(id, headers, rows, rowTags);
+    }
+
+    function renderAll() {
+      const ds = current();
+      renderPane(61, { headers: HEADERS, rows: ds.left.rows });
+      renderPane(62, { headers: HEADERS, rows: ds.right.rows });
+      Object.values(charts).forEach((c) => c.resize());
+    }
+
+    function applyOcrSide(sideKey, side) {
+      const id = sideKey === "left" ? "61" : "62";
+      const ocr = (side && side.ocr) || {};
+      const titleEl = document.getElementById("title" + id);
+      if (titleEl && side && side.title) {
+        titleEl.textContent = side.title + "-实时电能市场发布信息";
+      }
+      renderPane(id, {
+        headers: ocr.headers || [],
+        rows: ocr.rows || [],
+        row_tags: ocr.row_tags || null,
+      });
+    }
+
+    btnNext.onclick = () => {
+      dataIndex = (dataIndex + 1) % DATASETS.length;
+      renderAll();
+      setStatus(`已换数：${DATASETS[dataIndex].name}`, true);
+    };
+
+    btnCapture.onclick = async () => {
+      setBusy(true);
+      setStatus("抓拍中…");
+      try {
+        const resp = await fetch("/api/capture", { method: "POST" });
+        const data = await resp.json().catch(() => ({ detail: resp.statusText }));
+        if (!resp.ok) {
+          setStatus(data.detail || ("HTTP " + resp.status), false);
+          return;
+        }
+        const path = data.image_path || data.capture?.image_path || "";
+        setStatus(path ? `抓拍成功：${path}` : "抓拍成功（仅存盘）", true);
+      } catch (e) {
+        setStatus(String(e), false);
+      } finally {
+        setBusy(false);
+      }
+    };
+
+    btnRun.onclick = async () => {
+      const left_date = document.getElementById("date61").value || null;
+      const right_date = document.getElementById("date62").value || null;
+      setBusy(true);
+      setStatus("双屏分析中（抓拍→左右独立 OCR→入库）…");
+      try {
+        const resp = await fetch("/api/run/dual", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ left_date, right_date }),
+        });
+        const data = await resp.json().catch(() => ({ detail: resp.statusText }));
+        if (!resp.ok) {
+          setStatus(data.detail || ("HTTP " + resp.status), false);
+          console.warn("双屏分析失败", data);
+          return;
+        }
+        applyOcrSide("left", data.left);
+        applyOcrSide("right", data.right);
+        Object.values(charts).forEach((c) => c.resize());
+        const written = data.pi?.written;
+        const total = data.pi?.total;
+        const lp = data.left?.point_count ?? 0;
+        const rp = data.right?.point_count ?? 0;
+        const ld = data.left?.base_date || left_date || "?";
+        const rd = data.right?.base_date || right_date || "?";
+        const tip = data.ok
+          ? `双屏完成 · L${lp}(${ld})/R${rp}(${rd})` + (written != null ? ` · PI ${written}/${total}` : "")
+          : (data.pi?.reason || "双屏分析结束（有失败项）");
+        setStatus(tip, !!data.ok);
+        console.log("双屏分析结果", data);
+      } catch (e) {
+        setStatus(String(e), false);
+      } finally {
+        setBusy(false);
+      }
+    };
+
+    async function loadViewConfig() {
+      try {
+        const resp = await fetch("/api/config/view");
+        const data = await resp.json();
+        if (!resp.ok || !data.ok) return;
+        const L = data.dual?.left || data.screens?.left;
+        const R = data.dual?.right || data.screens?.right;
+        if (L?.title) {
+          const el = document.getElementById("title" + (L.id || "61"));
+          if (el) el.textContent = L.title + "-实时电能市场发布信息";
+        }
+        if (R?.title) {
+          const el = document.getElementById("title" + (R.id || "62"));
+          if (el) el.textContent = R.title + "-实时电能市场发布信息";
+        }
+        setStatus(`模式 ${data.mode} · 左右测点 ${L?.tag || ""} / ${R?.tag || ""}`, true);
+      } catch (_) { /* ignore */ }
+    }
+
+    const today = new Date().toISOString().slice(0, 10);
+    document.getElementById("date61").value = today;
+    document.getElementById("date62").value = today;
+    renderAll();
+    loadViewConfig();
+    window.addEventListener("resize", () => {
+      Object.values(charts).forEach((c) => c.resize());
+    });
+  </script>
+</body>
+</html>
