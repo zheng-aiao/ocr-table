@@ -18,10 +18,12 @@ from .config import (
     get_ocr_early_stop_min_density,
     get_ocr_max_width,
     get_ocr_min_points,
+    get_ocr_fix_decimal_cfg,
     get_ocr_sanitize_cfg,
     get_ocr_scale,
     get_ocr_table_crop,
     get_ocr_onnx_threads,
+    get_pi_value_max,
     new_ocr_run_dir,
     resolve_ocr_workdir,
 )
@@ -153,6 +155,7 @@ def ocr_only(
         debug_dir=run_dir,
         layout="single",
         sanitize=get_ocr_sanitize_cfg(cfg),
+        fix_decimal=get_ocr_fix_decimal_cfg(cfg),
         early_stop=get_ocr_early_stop(cfg),
         early_stop_min_density=get_ocr_early_stop_min_density(cfg),
         max_ocr_width=get_ocr_max_width(cfg),
@@ -242,12 +245,14 @@ def write_points_to_pi(
     写入 PI：一行数据对应一个测点 前缀_1 … _N。
     按 timestamp 时间线升序依次写入（旧点先写，新点后写）。
     优先用点内 tag；否则用 tag 参数或 capture.single.tag 作前缀按 row_index 拼接。
+    |value| 超过 pi.value_max 的点跳过不写（仍记入 items，不影响 OCR/前端展示）。
     """
     cfg = get_config()
     client = get_pi_client(cfg)
     client.connect()
     prefix = (tag or get_capture_tag(cfg)).strip()
     verify_write = bool((cfg.get("pi") or {}).get("verify_write", True))
+    value_max = get_pi_value_max(cfg)
 
     ordered = sorted(
         list(points or []),
@@ -255,6 +260,7 @@ def write_points_to_pi(
     )
 
     results = []
+    skipped_max = 0
     for p in ordered:
         label = p["time_label"]
         value = float(p["value"])
@@ -263,16 +269,40 @@ def write_points_to_pi(
         if not point_tag:
             row_i = int(p.get("row_index", 0))
             point_tag = row_tag_name(prefix, row_i)
-        rc = client.put_value(point_tag, value, when=ts, verify=verify_write)
         item: Dict[str, Any] = {
             "time_label": label,
             "tag": point_tag,
             "value": value,
             "timestamp": p["timestamp"],
             "row_index": p.get("row_index"),
-            "pi_code": rc,
-            "ok": rc == 0,
         }
+        if value_max is not None and abs(value) > value_max:
+            skipped_max += 1
+            item.update(
+                {
+                    "pi_code": None,
+                    "ok": True,
+                    "skipped": True,
+                    "reason": "value_exceeds_max",
+                    "message": (
+                        f"|value|={abs(value):g} 超过 pi.value_max={value_max:g}，"
+                        "跳过写入 PI（识别结果仍展示）"
+                    ),
+                }
+            )
+            logger.warning(
+                "跳过写 PI：%s @ %s value=%s > value_max=%s",
+                point_tag,
+                p.get("timestamp"),
+                value,
+                value_max,
+            )
+            results.append(item)
+            continue
+        rc = client.put_value(point_tag, value, when=ts, verify=verify_write)
+        item["pi_code"] = rc
+        item["ok"] = rc == 0
+        item["skipped"] = False
         if rc == -9001:
             item["message"] = (
                 "PI API 返回成功但按写入时刻回读未确认（常见：早于测点建点时间，历史值未入库）"
@@ -280,12 +310,16 @@ def write_points_to_pi(
         elif rc != 0:
             item["message"] = f"piar_putvalue 失败 code={rc}"
         results.append(item)
-    ok_count = sum(1 for r in results if r.get("ok"))
+    write_items = [r for r in results if not r.get("skipped")]
+    ok_count = sum(1 for r in write_items if r.get("ok"))
+    write_total = len(write_items)
     return {
-        "ok": ok_count == len(results),
+        "ok": ok_count == write_total,
         "tag": prefix,
         "written": ok_count,
-        "total": len(results),
+        "total": write_total,
+        "skipped_max": skipped_max,
+        "value_max": value_max,
         "items": results,
     }
 
@@ -331,6 +365,7 @@ def run_pipeline(
         debug_dir=run_dir,
         layout="single",
         sanitize=get_ocr_sanitize_cfg(cfg),
+        fix_decimal=get_ocr_fix_decimal_cfg(cfg),
         early_stop=get_ocr_early_stop(cfg),
         early_stop_min_density=get_ocr_early_stop_min_density(cfg),
         max_ocr_width=get_ocr_max_width(cfg),

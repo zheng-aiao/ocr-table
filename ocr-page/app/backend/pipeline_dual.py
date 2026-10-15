@@ -29,6 +29,7 @@ from .config import (
     get_ocr_max_width,
     get_ocr_min_points,
     get_ocr_parallel_sides,
+    get_ocr_fix_decimal_cfg,
     get_ocr_sanitize_cfg,
     get_ocr_scale,
     get_ocr_table_crop,
@@ -145,6 +146,7 @@ def _ocr_one_side(
     export_excel: bool = True,
     debug_dir: Optional[Path] = None,
     sanitize: Optional[Dict[str, Any]] = None,
+    fix_decimal: Optional[Dict[str, Any]] = None,
     date_cfg: Optional[Dict[str, Any]] = None,
     table_crop: Optional[Tuple[float, float, float, float]] = None,
 ) -> Dict[str, Any]:
@@ -176,6 +178,9 @@ def _ocr_one_side(
         debug_dir=debug_dir,
         layout="dual",
         sanitize=sanitize if sanitize is not None else get_ocr_sanitize_cfg(),
+        fix_decimal=(
+            fix_decimal if fix_decimal is not None else get_ocr_fix_decimal_cfg()
+        ),
         early_stop=bool(ocr_cfg.get("early_stop", get_ocr_early_stop())),
         early_stop_min_density=int(
             ocr_cfg.get("early_stop_min_density", get_ocr_early_stop_min_density())
@@ -389,6 +394,7 @@ def split_and_ocr(
             export_excel=export_excel,
             debug_dir=job["side_debug"],
             sanitize=get_ocr_sanitize_cfg(cfg),
+            fix_decimal=get_ocr_fix_decimal_cfg(cfg),
             date_cfg=get_ocr_date_cfg(cfg, layout="dual", side=job["side"]),
             table_crop=get_ocr_table_crop(cfg, layout="dual", side=job["side"]),
         )

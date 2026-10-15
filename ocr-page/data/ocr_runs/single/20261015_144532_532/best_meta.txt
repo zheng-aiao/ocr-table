@@ -1,0 +1,6 @@
+layout=single
+winner=cand_table_fixed
+score=(21, 3, 120, -0.3401)
+source=D:\yw\gx-ocr\ocr-page\data\ocr_runs\single\20261015_144532_532\cand_table_fixed.jpg
+base_date=2026-10-10
+date_source=ocr

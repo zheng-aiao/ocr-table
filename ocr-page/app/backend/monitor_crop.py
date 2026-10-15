@@ -8,8 +8,13 @@
 1) 行/列标准差（屏 UI 纹理远高于墙/桌）→ 主路径
 2) Sobel 能量投影（带间隙合并）→ 辅路径
 3) 亮屏连通域 → 兜底；近满幅框一律丢弃（避免墙桌连成整图误判「满屏」）
-4) 左右策略：宽贴满 → x 强制 0~1 只收上下；单侧大留白 → 去台卡保留左右裁
-5) 无有效候选 → 回退整图 (0,0,1,1)
+4) 左右策略（第一原则：少破坏屏内，防误截）：
+   - side_trim：单侧大留白（台卡/墙柱）→ 可较狠收
+   - soft_trim：两侧都有一点环境 → 软收（有上限）+ 左右外扩更大
+   - width_full：两侧几乎无环境 → x 强制 0~1，只收上下
+5) structure 水平范围作安全外包络：其它候选不得比它更窄砍左右
+6) 近分时优先更宽框（宁多留环境，不啃屏边）
+7) 无有效候选 → 回退整图 (0,0,1,1)
 
 失败一律保守回退，宁可不裁。
 """
@@ -32,10 +37,16 @@ _MIN_HEIGHT_RATIO = 0.32
 _REJECT_NEAR_FULL = 0.94
 # 真正几乎满屏才跳过：收边总和很小
 _MIN_TRIM = 0.04
-_PAD_RATIO = 0.015  # 裁框外扩，避免切掉日期栏/底边
-# 左右策略：单侧留白 ≥ 此值且对侧很小 → 去台卡；否则视为宽贴满，左右强制 0~1
+_PAD_RATIO = 0.015  # 上下外扩，避免切掉日期栏/底边
+_PAD_X_SOFT = 0.035  # 左右软收外扩更大：宁可多留环境
+# 左右策略：单侧留白 ≥ 此值且对侧很小 → 去台卡
 _SIDE_TRIM_MIN = 0.12
 _SIDE_TRIM_OTHER_MAX = 0.08
+# 两侧都很小 → 视为宽贴满；否则软收，每侧最多收这么多
+_WIDTH_FULL_MAX = 0.04
+_SOFT_TRIM_MAX = 0.08
+# 近分阈值：分差 ≤ 此值时优先更宽框
+_NEAR_SCORE_EPS = 0.02
 
 
 def detect_monitor_region(
@@ -104,7 +115,7 @@ def detect_monitor_region(
         detail["energy_raw"] = energy_box
         detail["bright_raw"] = bright_box
 
-        # 宽贴满 vs 去台卡：先归一化左右，再打分（避免「收左右」虚高分）
+        # 宽贴满 / 软收 / 去台卡：先归一化左右，再打分
         structure_box, sp = _normalize_horizontal(structure_box)
         energy_box, ep = _normalize_horizontal(energy_box)
         bright_box, bp = _normalize_horizontal(bright_box)
@@ -117,21 +128,25 @@ def detect_monitor_region(
             "bright": bp,
         }
 
-        candidates: list[Tuple[str, Tuple[float, float, float, float], float]] = []
+        # structure 水平安全外包络（含左右外扩）：其它模式不得比它更窄砍左右
+        x_envelope = _horizontal_safety_envelope(structure_box, policy=sp)
+        detail["x_envelope"] = list(x_envelope) if x_envelope else None
+
+        candidates: list[Tuple[str, Tuple[float, float, float, float], float, str]] = []
         # structure 优先参与打分；同面积时略加分
-        for mode, box, bonus in (
-            ("structure", structure_box, 0.08),
-            ("energy", energy_box, 0.0),
-            ("bright", bright_box, -0.05),
+        for mode, box, bonus, policy in (
+            ("structure", structure_box, 0.08, sp),
+            ("energy", energy_box, 0.0, ep),
+            ("bright", bright_box, -0.05, bp),
         ):
             if not box:
                 continue
-            scored = _validate_and_pad(box, pad=_PAD_RATIO)
+            pad_x = _pad_x_for_policy(policy)
+            scored = _validate_and_pad(box, pad_y=_PAD_RATIO, pad_x=pad_x)
             if scored is None:
                 continue
             crop, score = scored
-            # 宽贴满只靠上下收益计分；左右贴边后不再因「误收左右」占优
-            candidates.append((mode, crop, score + bonus))
+            candidates.append((mode, crop, score + bonus, policy))
 
         if not candidates:
             out["detail"] = detail
@@ -140,15 +155,39 @@ def detect_monitor_region(
             logger.info("显示器区域未命中，回退整图")
             return out
 
-        # 优先：收得更紧且仍通过校验（score 高 = 面积适中 + 收紧收益）
+        # 高分优先；近分时优先更宽框（防 bright 以 0.00x 分差啃掉屏右缘）
         candidates.sort(key=lambda item: item[2], reverse=True)
-        mode, crop, score = candidates[0]
+        best_score = candidates[0][2]
+        near = [c for c in candidates if best_score - c[2] <= _NEAR_SCORE_EPS]
+        mode, crop, score, policy = max(
+            near,
+            key=lambda c: (c[1][2] - c[1][0], c[2]),
+        )
         detail["chosen_score"] = round(score, 4)
+        detail["chosen_policy"] = policy
+        detail["near_prefer_wider"] = len(near) > 1 and near[0][0] != mode
         detail["candidates"] = [
-            {"mode": m, "crop": list(c), "score": round(s, 4)} for m, c, s in candidates
+            {
+                "mode": m,
+                "crop": list(c),
+                "score": round(s, 4),
+                "policy": p,
+            }
+            for m, c, s, p in candidates
         ]
 
         x0, y0, x1, y1 = crop
+        # 套 structure 水平外包络：只扩不缩
+        if x_envelope is not None:
+            ex0, ex1 = x_envelope
+            nx0, nx1 = min(x0, ex0), max(x1, ex1)
+            if nx0 < x0 - 1e-6 or nx1 > x1 + 1e-6:
+                detail["envelope_applied"] = {
+                    "before": [round(x0, 4), round(x1, 4)],
+                    "after": [round(nx0, 4), round(nx1, 4)],
+                }
+            x0, x1 = nx0, nx1
+
         trim = (x0 + (1.0 - x1)) + (y0 + (1.0 - y1))
         # 仅当最佳候选几乎不收边时跳过；假满屏候选已在 validate 剔除
         if trim < _MIN_TRIM:
@@ -166,8 +205,9 @@ def detect_monitor_region(
         out["detail"] = detail
         out["ms"] = int((time.perf_counter() - t0) * 1000)
         logger.info(
-            "显示器区域 ok=1 mode=%s crop=%s ms=%s",
+            "显示器区域 ok=1 mode=%s policy=%s crop=%s ms=%s",
             mode,
+            policy,
             out["crop"],
             out["ms"],
         )
@@ -278,10 +318,37 @@ def prepare_monitor_work_image(
     return work, meta, mon_str
 
 
+def _pad_x_for_policy(policy: str) -> float:
+    """软收/去台卡：左右外扩更大；宽贴满左右已是 0~1，pad 无所谓。"""
+    if policy in ("soft_trim", "side_trim"):
+        return _PAD_X_SOFT
+    return _PAD_RATIO
+
+
+def _horizontal_safety_envelope(
+    structure_box: Optional[Tuple[float, float, float, float]],
+    *,
+    policy: str,
+) -> Optional[Tuple[float, float]]:
+    """
+    structure 归一化后的水平范围 + 对应外扩，作为最终裁剪左右不得更窄的安全外包络。
+    """
+    if not structure_box:
+        return None
+    x0, _y0, x1, _y1 = (float(v) for v in structure_box)
+    pad_x = _pad_x_for_policy(policy)
+    x0 = max(0.0, x0 - pad_x)
+    x1 = min(1.0, x1 + pad_x)
+    if x1 <= x0 + 0.05:
+        return None
+    return (x0, x1)
+
+
 def _validate_and_pad(
     box: Tuple[float, float, float, float],
     *,
-    pad: float,
+    pad_y: float,
+    pad_x: Optional[float] = None,
 ) -> Optional[Tuple[Tuple[float, float, float, float], float]]:
     """校验比例框并外扩；返回 (crop, score) 或 None。"""
     x0, y0, x1, y1 = (float(v) for v in box)
@@ -289,9 +356,8 @@ def _validate_and_pad(
     y0 = max(0.0, min(1.0, y0))
     x1 = max(0.0, min(1.0, x1))
     y1 = max(0.0, min(1.0, y1))
-    # 外扩
-    pw = pad
-    ph = pad
+    pw = float(_PAD_RATIO if pad_x is None else pad_x)
+    ph = float(pad_y)
     x0 = max(0.0, x0 - pw)
     y0 = max(0.0, y0 - ph)
     x1 = min(1.0, x1 + pw)
@@ -310,10 +376,10 @@ def _validate_and_pad(
     ar = bw / max(bh, 1e-6)
     if ar < 0.85 or ar > 3.2:
         return None
-    # 收益以「上下收边」为主；左右收边权重很低（宽贴满场景不该靠砍宽度得分）
+    # 收益以「上下收边」为主；左右收边权重很低（防靠砍宽度虚高分）
     trim_y = y0 + (1.0 - y1)
     trim_x = x0 + (1.0 - x1)
-    trim = trim_y * 1.0 + trim_x * 0.15 + (1.0 - area) * 0.35
+    trim = trim_y * 1.0 + trim_x * 0.10 + (1.0 - area) * 0.30
     area_pen = max(0.0, 0.55 - area) * 2.0
     score = trim - area_pen
     if (1.0 - area) < _MIN_TRIM:
@@ -325,9 +391,10 @@ def _normalize_horizontal(
     box: Optional[Tuple[float, float, float, float]],
 ) -> Tuple[Optional[Tuple[float, float, float, float]], str]:
     """
-    区分两种现场：
-    - width_full（宽贴满）：显示器左右已贴齐画面，列投影常因黑边框略收 → 左右强制 0~1，只留上下裁
-    - side_trim（去台卡）：单侧明显大留白、对侧很小 → 保留左右收紧
+    左右策略（少破坏屏内优先）：
+    - side_trim：单侧明显大留白、对侧很小 → 保留检测左右（去台卡）
+    - soft_trim：两侧都有一点环境 → 软收（每侧有上限），不追求收尽
+    - width_full：两侧几乎无环境 → 左右强制 0~1，只留上下裁
 
     @return (box_or_None, policy_name)
     """
@@ -348,8 +415,13 @@ def _normalize_horizontal(
     )
     if one_sided:
         return (x0, y0, x1, y1), "side_trim"
-    # 宽贴满：两侧都只是窄边框/投影误差 → 左右贴边
-    return (0.0, y0, 1.0, y1), "width_full"
+    # 两侧都几乎贴边 → 宽贴满
+    if left <= _WIDTH_FULL_MAX and right <= _WIDTH_FULL_MAX:
+        return (0.0, y0, 1.0, y1), "width_full"
+    # 软收：保留检测方向，但每侧最多收 _SOFT_TRIM_MAX（宁多留环境）
+    sx0 = min(x0, _SOFT_TRIM_MAX)
+    sx1 = max(x1, 1.0 - _SOFT_TRIM_MAX)
+    return (sx0, y0, sx1, y1), "soft_trim"
 
 
 def _band_from_projection(
@@ -473,7 +545,7 @@ def _detect_via_structure(gray) -> Optional[Tuple[float, float, float, float]]:
         x0, x1 = 0.0, 1.0
     else:
         x0, x1 = x_band
-    # 左右是否贴边由 _normalize_horizontal 统一判定（宽贴满 vs 去台卡）
+    # 左右是否贴边由 _normalize_horizontal 统一判定
     return (float(x0), float(y0), float(x1), float(y1))
 
 

@@ -2,7 +2,7 @@
 
 camera:
   # DS-2CD6855FWD-PL
-  host: "192.168.1.64"
+  host: "192.168.11.64"
   port: 80
   user: "admin"
   password: "Sdyw@192"
@@ -13,7 +13,7 @@ camera:
 capture:
   dir: "data/captures"
   # mode 与下方块名对应：single | dual
-  mode: dual
+  mode: single
   # 定时处置：开启后立刻跑一轮，之后每隔 interval_minutes 再跑
   # 到点若上一轮未完成则跳过，等下一个间隔；跟随上方 mode
   # 文件落盘：data/captures/YYYYMMDD/H-MM.jpg（如 9-09.jpg、10-20.jpg；同分钟重复加 _2）
@@ -72,10 +72,11 @@ ocr:
   # early_stop=true 时：仅当 auto 三行数据格全部填满（100%）才跳过 fixed
   early_stop: true
   early_stop_min_density: 100
-  # 双屏左右并行（缩短墙钟；与 onnx_threads 叠加会占更多核）
-  parallel_sides: true
-  # ONNX 每会话 CPU 线程数（默认 2）。不设或过大时 RapidOCR 会占满全部核心，
-  # 识别期间整机卡顿、Chrome 打开网页极慢。现场机器核少可改 1；核多可试 4。
+  # 双屏左右并行（缩短墙钟；与 onnx_threads 叠加会占更多核）。
+  # 默认 false：识别时仍可正常浏览历史页；机器核多且不需要同机看网页时可改 true。
+  parallel_sides: false
+  # ONNX 每会话 CPU 线程数（默认 1）。不设或过大时 RapidOCR 会占满全部核心，
+  # 识别期间整机卡顿、Chrome 打开历史记录极慢。核多且接受卡顿可试 2～4。
   onnx_threads: 2
   # 业务日：优先 OCR 定位「日期」标签再认右侧筛选框（date_auto_locate）；失败才用 date_crop
   # 写 PI 日期相对 OCR 识别日提前的天数：1=提前一天，0=当天（不提前）
@@ -86,6 +87,13 @@ ocr:
   # 履历「预计值」默认 = 本屏 OCR 数据行数 × 时间刻度列数（左右各自计算）
   # 表体固定 1 行时刻表头 + 3 行数据；表头以纯 OCR 的 Δ=15 锚段为准，左右缺列按数据跨度推导
   # 若需固定覆盖可写：expected_cells: 288
+  # 小数点补点后处理：OCR 未读出点时猜补点。
+  # 5 位：双候选 xx.xxx / xxx.xx，按邻格+同行中位数选优（min 相对误差），
+  #   最优误差 > ratio_k 则拒补；6 位固定 xxx.xxx；电价行 4 位 d.ddd。
+  # false=保留 OCR 原文（评估引擎认点能力）；true=开启补点（现场默认建议开）。
+  fix_decimal:
+    enabled: true
+    ratio_k: 3.0          # 5 位选优拒补阈值（相对最近锚点）
   # 同行量级清洗：仅整数为主的电力/计划行用比值规则置空异常格。
   # 已去掉「位数众数」硬删（电价尖峰跨位数必然误杀）；电价行（小数为主）不清洗。
   sanitize:
@@ -110,6 +118,9 @@ pi:
   curve_count: 96
   # 写后按时刻回读校验；关掉会更快，但早于建点时间时可能假成功
   verify_write: true
+  # 写入绝对值上限：|value| 超出则该点跳过不写 PI（OCR/前端仍展示识别结果）。
+  # 用于拦截漏小数点产生的 3726、25673 等异常大数；设为 0 关闭拦截。
+  value_max: 1500
 
 server:
   host: "127.0.0.1"

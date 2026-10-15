@@ -1,0 +1,4 @@
+date_source=failed
+reason=date_not_found
+message=未识别到左上角日期筛选框中的业务日期，已跳过表格 OCR
+table_ocr_skipped=1

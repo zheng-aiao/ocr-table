@@ -1,0 +1,84 @@
+{
+  "ok": true,
+  "crop": [
+    0.1075,
+    0.0617,
+    1.0,
+    0.825
+  ],
+  "mode": "structure",
+  "ms": 315,
+  "detail": {
+    "probe_wh": [
+      800,
+      600
+    ],
+    "src_wh": [
+      2560,
+      1920
+    ],
+    "structure_raw": [
+      0.1425,
+      0.07666666666666666,
+      0.99625,
+      0.81
+    ],
+    "energy_raw": null,
+    "bright_raw": [
+      0.07125,
+      0.11666666666666667,
+      0.8775,
+      0.7716666666666666
+    ],
+    "structure": [
+      0.1425,
+      0.07666666666666666,
+      0.99625,
+      0.81
+    ],
+    "energy": null,
+    "bright": [
+      0.07125,
+      0.11666666666666667,
+      0.8775,
+      0.7716666666666666
+    ],
+    "width_policy": {
+      "structure": "side_trim",
+      "energy": "none",
+      "bright": "side_trim"
+    },
+    "x_envelope": [
+      0.10749999999999998,
+      1.0
+    ],
+    "chosen_score": 0.423,
+    "chosen_policy": "side_trim",
+    "near_prefer_wider": false,
+    "candidates": [
+      {
+        "mode": "structure",
+        "crop": [
+          0.10749999999999998,
+          0.06166666666666666,
+          1.0,
+          0.8250000000000001
+        ],
+        "score": 0.423,
+        "policy": "side_trim"
+      },
+      {
+        "mode": "bright",
+        "crop": [
+          0.03624999999999999,
+          0.10166666666666667,
+          0.9125,
+          0.7866666666666666
+        ],
+        "score": 0.3973,
+        "policy": "side_trim"
+      }
+    ]
+  },
+  "enabled": true
+}

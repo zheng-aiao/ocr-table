@@ -1,0 +1,29 @@
+{
+  "ok": true,
+  "seam": 0.4719,
+  "mode": "sidebar",
+  "ms": 68,
+  "detail": {
+    "sidebar": {
+      "ok": true,
+      "x": 302,
+      "score": 140.9536476135254,
+      "bw": 44
+    },
+    "edge": {
+      "ok": true,
+      "x": 384,
+      "score": 113.27715301513672
+    },
+    "probe_wh": [
+      640,
+      408
+    ],
+    "src_wh": [
+      2218,
+      1415
+    ]
+  },
+  "enabled": true,
+  "gap": 0.012
+}

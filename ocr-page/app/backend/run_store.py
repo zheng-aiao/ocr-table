@@ -1246,17 +1246,24 @@ def apply_pi_write_result(
 
     write = write or {}
     write_ok = bool(write.get("ok"))
+    skipped_max = int(write.get("skipped_max") or 0)
     data["pi"] = {
         "ok": write_ok,
         "written": int(write.get("written") or 0),
         "total": int(write.get("total") or 0),
         "skipped": False,
+        "skipped_max": skipped_max,
+        "value_max": write.get("value_max"),
         "reason": None if write_ok else "pi_write_failed",
         "message": None if write_ok else "写 PI 未全部成功",
         "sides_written": write.get("sides_written"),
         "sides_skipped": write.get("sides_skipped"),
         "rewritten_at": now,
     }
+    if write_ok and skipped_max > 0:
+        data["pi"]["message"] = (
+            f"已跳过 {skipped_max} 个超出 pi.value_max 的点（未写入）"
+        )
     if str(data.get("mode") or "").lower() == "dual":
         written_sides = [
             s for s in ("left", "right") if bool((data.get(s) or {}).get("ok"))

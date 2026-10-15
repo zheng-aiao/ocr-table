@@ -1,0 +1,1061 @@
+{
+  "id": "single_20261015_093207_408",
+  "mode": "single",
+  "trigger": "debug",
+  "started_at": "2026-10-15 09:32:07",
+  "finished_at": "2026-10-15 09:33:10",
+  "ok": true,
+  "reason": null,
+  "message": null,
+  "point_count": 63,
+  "min_points": 8,
+  "upload_name": "16-10.jpg",
+  "display_name": "16-10.jpg",
+  "capture_path": "C:\\Users\\hzj\\AppData\\Local\\Temp\\ocr_upload_4bp00q14.jpg",
+  "capture_url": "",
+  "source_path": "D:\\yw\\gx-ocr\\ocr-page\\data\\ocr_runs\\single\\20261015_093207_408\\00_source.jpg",
+  "source_url": "/data/ocr_runs/single/20261015_093207_408/00_source.jpg",
+  "artifacts_dir": "D:\\yw\\gx-ocr\\ocr-page\\data\\ocr_runs\\single\\20261015_093207_408",
+  "artifacts_url": "/data/ocr_runs/single/20261015_093207_408",
+  "excel_path": "",
+  "excel_url": "",
+  "pi": {
+    "ok": null,
+    "written": 0,
+    "total": 0,
+    "skipped": true,
+    "reason": "ocr_only",
+    "message": null,
+    "sides_written": null,
+    "sides_skipped": null
+  },
+  "quality": {
+    "ok": true,
+    "point_count": 63,
+    "min_points": 8
+  },
+  "timing": {
+    "ocr_ms": 62969,
+    "monitor_ms": 77,
+    "date_ms": 39749,
+    "table_ms": 23202,
+    "total_ms": 63109
+  },
+  "ocr_ms": 62969,
+  "total_ms": 63109,
+  "capture_ms": null,
+  "pi_ms": null,
+  "monitor_path": "D:\\yw\\gx-ocr\\ocr-page\\data\\ocr_runs\\single\\20261015_093207_408\\00_monitor.jpg",
+  "monitor_url": "/data/ocr_runs/single/20261015_093207_408/00_monitor.jpg",
+  "monitor": {
+    "ok": true,
+    "crop": [
+      0.0,
+      0.0633,
+      1.0,
+      0.8017
+    ],
+    "mode": "structure",
+    "ms": 77,
+    "detail": {
+      "probe_wh": [
+        800,
+        600
+      ],
+      "src_wh": [
+        2560,
+        1920
+      ],
+      "structure_raw": [
+        0.14375,
+        0.07833333333333334,
+        0.91625,
+        0.7866666666666666
+      ],
+      "energy_raw": null,
+      "bright_raw": [
+        0.065,
+        0.11833333333333333,
+        0.88125,
+        0.7766666666666666
+      ],
+      "structure": [
+        0.0,
+        0.07833333333333334,
+        1.0,
+        0.7866666666666666
+      ],
+      "energy": null,
+      "bright": [
+        0.0,
+        0.11833333333333333,
+        1.0,
+        0.7766666666666666
+      ],
+      "width_policy": {
+        "structure": "width_full",
+        "energy": "none",
+        "bright": "width_full"
+      },
+      "chosen_score": 0.4333,
+      "candidates": [
+        {
+          "mode": "structure",
+          "crop": [
+            0.0,
+            0.06333333333333334,
+            1.0,
+            0.8016666666666666
+          ],
+          "score": 0.4333
+        },
+        {
+          "mode": "bright",
+          "crop": [
+            0.0,
+            0.10333333333333333,
+            1.0,
+            0.7916666666666666
+          ],
+          "score": 0.3708
+        }
+      ]
+    },
+    "enabled": true
+  },
+  "headers": [
+    "09:45",
+    "10:00",
+    "10:15",
+    "10:30",
+    "10:45",
+    "11:00",
+    "11:15",
+    "11:30",
+    "11:45",
+    "12:00",
+    "12:15",
+    "12:30",
+    "12:45",
+    "13:00",
+    "13:15",
+    "13:30",
+    "13:45",
+    "14:00",
+    "14:15",
+    "14:30",
+    "14:45"
+  ],
+  "rows": [
+    [
+      "0",
+      "0",
+      "0",
+      "0",
+      "0",
+      "0",
+      "0",
+      "0",
+      "0",
+      "0",
+      "0",
+      "0",
+      "0",
+      "0",
+      "0",
+      "0",
+      "0",
+      "0",
+      "0",
+      "0",
+      "0"
+    ],
+    [
+      "0",
+      "0",
+      "0",
+      "0",
+      "0",
+      "0",
+      "0",
+      "0",
+      "0",
+      "0",
+      "0",
+      "0",
+      "0",
+      "0",
+      "0",
+      "0",
+      "0",
+      "0",
+      "0",
+      "0",
+      "0"
+    ],
+    [
+      "91.92",
+      "100.615",
+      "85.709",
+      "85.305",
+      "85.479",
+      "85.105",
+      "85.112",
+      "85.1",
+      "85.501",
+      "69.67",
+      "85.799",
+      "69.718",
+      "36.06",
+      "36.065",
+      "35.96",
+      "36.304",
+      "33.812",
+      "34.437",
+      "36.233",
+      "69.895",
+      "78.289"
+    ]
+  ],
+  "row_tags": [
+    "GX.DEMO.OCR_1",
+    "GX.DEMO.OCR_2",
+    "GX.DEMO.OCR_3"
+  ],
+  "gap_fill_map": [
+    [
+      "",
+      "",
+      "",
+      "",
+      "",
+      "",
+      "",
+      "",
+      "",
+      "",
+      "",
+      "",
+      "",
+      "",
+      "",
+      "",
+      "",
+      "",
+      "",
+      "",
+      ""
+    ],
+    [
+      "",
+      "",
+      "",
+      "",
+      "",
+      "",
+      "",
+      "",
+      "",
+      "",
+      "",
+      "",
+      "",
+      "",
+      "",
+      "",
+      "",
+      "",
+      "",
+      "",
+      ""
+    ],
+    [
+      "",
+      "",
+      "",
+      "",
+      "",
+      "",
+      "",
+      "",
+      "",
+      "",
+      "",
+      "",
+      "",
+      "",
+      "",
+      "",
+      "",
+      "",
+      "",
+      "",
+      ""
+    ]
+  ],
+  "gap_filled": 0,
+  "points": [
+    {
+      "time_label": "09:45",
+      "value": 0.0,
+      "timestamp": "2026-10-09 09:45:00",
+      "tag": "GX.DEMO.OCR_1",
+      "row_index": 0
+    },
+    {
+      "time_label": "10:00",
+      "value": 0.0,
+      "timestamp": "2026-10-09 10:00:00",
+      "tag": "GX.DEMO.OCR_1",
+      "row_index": 0
+    },
+    {
+      "time_label": "10:15",
+      "value": 0.0,
+      "timestamp": "2026-10-09 10:15:00",
+      "tag": "GX.DEMO.OCR_1",
+      "row_index": 0
+    },
+    {
+      "time_label": "10:30",
+      "value": 0.0,
+      "timestamp": "2026-10-09 10:30:00",
+      "tag": "GX.DEMO.OCR_1",
+      "row_index": 0
+    },
+    {
+      "time_label": "10:45",
+      "value": 0.0,
+      "timestamp": "2026-10-09 10:45:00",
+      "tag": "GX.DEMO.OCR_1",
+      "row_index": 0
+    },
+    {
+      "time_label": "11:00",
+      "value": 0.0,
+      "timestamp": "2026-10-09 11:00:00",
+      "tag": "GX.DEMO.OCR_1",
+      "row_index": 0
+    },
+    {
+      "time_label": "11:15",
+      "value": 0.0,
+      "timestamp": "2026-10-09 11:15:00",
+      "tag": "GX.DEMO.OCR_1",
+      "row_index": 0
+    },
+    {
+      "time_label": "11:30",
+      "value": 0.0,
+      "timestamp": "2026-10-09 11:30:00",
+      "tag": "GX.DEMO.OCR_1",
+      "row_index": 0
+    },
+    {
+      "time_label": "11:45",
+      "value": 0.0,
+      "timestamp": "2026-10-09 11:45:00",
+      "tag": "GX.DEMO.OCR_1",
+      "row_index": 0
+    },
+    {
+      "time_label": "12:00",
+      "value": 0.0,
+      "timestamp": "2026-10-09 12:00:00",
+      "tag": "GX.DEMO.OCR_1",
+      "row_index": 0
+    },
+    {
+      "time_label": "12:15",
+      "value": 0.0,
+      "timestamp": "2026-10-09 12:15:00",
+      "tag": "GX.DEMO.OCR_1",
+      "row_index": 0
+    },
+    {
+      "time_label": "12:30",
+      "value": 0.0,
+      "timestamp": "2026-10-09 12:30:00",
+      "tag": "GX.DEMO.OCR_1",
+      "row_index": 0
+    },
+    {
+      "time_label": "12:45",
+      "value": 0.0,
+      "timestamp": "2026-10-09 12:45:00",
+      "tag": "GX.DEMO.OCR_1",
+      "row_index": 0
+    },
+    {
+      "time_label": "13:00",
+      "value": 0.0,
+      "timestamp": "2026-10-09 13:00:00",
+      "tag": "GX.DEMO.OCR_1",
+      "row_index": 0
+    },
+    {
+      "time_label": "13:15",
+      "value": 0.0,
+      "timestamp": "2026-10-09 13:15:00",
+      "tag": "GX.DEMO.OCR_1",
+      "row_index": 0
+    },
+    {
+      "time_label": "13:30",
+      "value": 0.0,
+      "timestamp": "2026-10-09 13:30:00",
+      "tag": "GX.DEMO.OCR_1",
+      "row_index": 0
+    },
+    {
+      "time_label": "13:45",
+      "value": 0.0,
+      "timestamp": "2026-10-09 13:45:00",
+      "tag": "GX.DEMO.OCR_1",
+      "row_index": 0
+    },
+    {
+      "time_label": "14:00",
+      "value": 0.0,
+      "timestamp": "2026-10-09 14:00:00",
+      "tag": "GX.DEMO.OCR_1",
+      "row_index": 0
+    },
+    {
+      "time_label": "14:15",
+      "value": 0.0,
+      "timestamp": "2026-10-09 14:15:00",
+      "tag": "GX.DEMO.OCR_1",
+      "row_index": 0
+    },
+    {
+      "time_label": "14:30",
+      "value": 0.0,
+      "timestamp": "2026-10-09 14:30:00",
+      "tag": "GX.DEMO.OCR_1",
+      "row_index": 0
+    },
+    {
+      "time_label": "14:45",
+      "value": 0.0,
+      "timestamp": "2026-10-09 14:45:00",
+      "tag": "GX.DEMO.OCR_1",
+      "row_index": 0
+    },
+    {
+      "time_label": "09:45",
+      "value": 0.0,
+      "timestamp": "2026-10-09 09:45:00",
+      "tag": "GX.DEMO.OCR_2",
+      "row_index": 1
+    },
+    {
+      "time_label": "10:00",
+      "value": 0.0,
+      "timestamp": "2026-10-09 10:00:00",
+      "tag": "GX.DEMO.OCR_2",
+      "row_index": 1
+    },
+    {
+      "time_label": "10:15",
+      "value": 0.0,
+      "timestamp": "2026-10-09 10:15:00",
+      "tag": "GX.DEMO.OCR_2",
+      "row_index": 1
+    },
+    {
+      "time_label": "10:30",
+      "value": 0.0,
+      "timestamp": "2026-10-09 10:30:00",
+      "tag": "GX.DEMO.OCR_2",
+      "row_index": 1
+    },
+    {
+      "time_label": "10:45",
+      "value": 0.0,
+      "timestamp": "2026-10-09 10:45:00",
+      "tag": "GX.DEMO.OCR_2",
+      "row_index": 1
+    },
+    {
+      "time_label": "11:00",
+      "value": 0.0,
+      "timestamp": "2026-10-09 11:00:00",
+      "tag": "GX.DEMO.OCR_2",
+      "row_index": 1
+    },
+    {
+      "time_label": "11:15",
+      "value": 0.0,
+      "timestamp": "2026-10-09 11:15:00",
+      "tag": "GX.DEMO.OCR_2",
+      "row_index": 1
+    },
+    {
+      "time_label": "11:30",
+      "value": 0.0,
+      "timestamp": "2026-10-09 11:30:00",
+      "tag": "GX.DEMO.OCR_2",
+      "row_index": 1
+    },
+    {
+      "time_label": "11:45",
+      "value": 0.0,
+      "timestamp": "2026-10-09 11:45:00",
+      "tag": "GX.DEMO.OCR_2",
+      "row_index": 1
+    },
+    {
+      "time_label": "12:00",
+      "value": 0.0,
+      "timestamp": "2026-10-09 12:00:00",
+      "tag": "GX.DEMO.OCR_2",
+      "row_index": 1
+    },
+    {
+      "time_label": "12:15",
+      "value": 0.0,
+      "timestamp": "2026-10-09 12:15:00",
+      "tag": "GX.DEMO.OCR_2",
+      "row_index": 1
+    },
+    {
+      "time_label": "12:30",
+      "value": 0.0,
+      "timestamp": "2026-10-09 12:30:00",
+      "tag": "GX.DEMO.OCR_2",
+      "row_index": 1
+    },
+    {
+      "time_label": "12:45",
+      "value": 0.0,
+      "timestamp": "2026-10-09 12:45:00",
+      "tag": "GX.DEMO.OCR_2",
+      "row_index": 1
+    },
+    {
+      "time_label": "13:00",
+      "value": 0.0,
+      "timestamp": "2026-10-09 13:00:00",
+      "tag": "GX.DEMO.OCR_2",
+      "row_index": 1
+    },
+    {
+      "time_label": "13:15",
+      "value": 0.0,
+      "timestamp": "2026-10-09 13:15:00",
+      "tag": "GX.DEMO.OCR_2",
+      "row_index": 1
+    },
+    {
+      "time_label": "13:30",
+      "value": 0.0,
+      "timestamp": "2026-10-09 13:30:00",
+      "tag": "GX.DEMO.OCR_2",
+      "row_index": 1
+    },
+    {
+      "time_label": "13:45",
+      "value": 0.0,
+      "timestamp": "2026-10-09 13:45:00",
+      "tag": "GX.DEMO.OCR_2",
+      "row_index": 1
+    },
+    {
+      "time_label": "14:00",
+      "value": 0.0,
+      "timestamp": "2026-10-09 14:00:00",
+      "tag": "GX.DEMO.OCR_2",
+      "row_index": 1
+    },
+    {
+      "time_label": "14:15",
+      "value": 0.0,
+      "timestamp": "2026-10-09 14:15:00",
+      "tag": "GX.DEMO.OCR_2",
+      "row_index": 1
+    },
+    {
+      "time_label": "14:30",
+      "value": 0.0,
+      "timestamp": "2026-10-09 14:30:00",
+      "tag": "GX.DEMO.OCR_2",
+      "row_index": 1
+    },
+    {
+      "time_label": "14:45",
+      "value": 0.0,
+      "timestamp": "2026-10-09 14:45:00",
+      "tag": "GX.DEMO.OCR_2",
+      "row_index": 1
+    },
+    {
+      "time_label": "09:45",
+      "value": 91.92,
+      "timestamp": "2026-10-09 09:45:00",
+      "tag": "GX.DEMO.OCR_3",
+      "row_index": 2
+    },
+    {
+      "time_label": "10:00",
+      "value": 100.615,
+      "timestamp": "2026-10-09 10:00:00",
+      "tag": "GX.DEMO.OCR_3",
+      "row_index": 2
+    },
+    {
+      "time_label": "10:15",
+      "value": 85.709,
+      "timestamp": "2026-10-09 10:15:00",
+      "tag": "GX.DEMO.OCR_3",
+      "row_index": 2
+    },
+    {
+      "time_label": "10:30",
+      "value": 85.305,
+      "timestamp": "2026-10-09 10:30:00",
+      "tag": "GX.DEMO.OCR_3",
+      "row_index": 2
+    },
+    {
+      "time_label": "10:45",
+      "value": 85.479,
+      "timestamp": "2026-10-09 10:45:00",
+      "tag": "GX.DEMO.OCR_3",
+      "row_index": 2
+    },
+    {
+      "time_label": "11:00",
+      "value": 85.105,
+      "timestamp": "2026-10-09 11:00:00",
+      "tag": "GX.DEMO.OCR_3",
+      "row_index": 2
+    },
+    {
+      "time_label": "11:15",
+      "value": 85.112,
+      "timestamp": "2026-10-09 11:15:00",
+      "tag": "GX.DEMO.OCR_3",
+      "row_index": 2
+    },
+    {
+      "time_label": "11:30",
+      "value": 85.1,
+      "timestamp": "2026-10-09 11:30:00",
+      "tag": "GX.DEMO.OCR_3",
+      "row_index": 2
+    },
+    {
+      "time_label": "11:45",
+      "value": 85.501,
+      "timestamp": "2026-10-09 11:45:00",
+      "tag": "GX.DEMO.OCR_3",
+      "row_index": 2
+    },
+    {
+      "time_label": "12:00",
+      "value": 69.67,
+      "timestamp": "2026-10-09 12:00:00",
+      "tag": "GX.DEMO.OCR_3",
+      "row_index": 2
+    },
+    {
+      "time_label": "12:15",
+      "value": 85.799,
+      "timestamp": "2026-10-09 12:15:00",
+      "tag": "GX.DEMO.OCR_3",
+      "row_index": 2
+    },
+    {
+      "time_label": "12:30",
+      "value": 69.718,
+      "timestamp": "2026-10-09 12:30:00",
+      "tag": "GX.DEMO.OCR_3",
+      "row_index": 2
+    },
+    {
+      "time_label": "12:45",
+      "value": 36.06,
+      "timestamp": "2026-10-09 12:45:00",
+      "tag": "GX.DEMO.OCR_3",
+      "row_index": 2
+    },
+    {
+      "time_label": "13:00",
+      "value": 36.065,
+      "timestamp": "2026-10-09 13:00:00",
+      "tag": "GX.DEMO.OCR_3",
+      "row_index": 2
+    },
+    {
+      "time_label": "13:15",
+      "value": 35.96,
+      "timestamp": "2026-10-09 13:15:00",
+      "tag": "GX.DEMO.OCR_3",
+      "row_index": 2
+    },
+    {
+      "time_label": "13:30",
+      "value": 36.304,
+      "timestamp": "2026-10-09 13:30:00",
+      "tag": "GX.DEMO.OCR_3",
+      "row_index": 2
+    },
+    {
+      "time_label": "13:45",
+      "value": 33.812,
+      "timestamp": "2026-10-09 13:45:00",
+      "tag": "GX.DEMO.OCR_3",
+      "row_index": 2
+    },
+    {
+      "time_label": "14:00",
+      "value": 34.437,
+      "timestamp": "2026-10-09 14:00:00",
+      "tag": "GX.DEMO.OCR_3",
+      "row_index": 2
+    },
+    {
+      "time_label": "14:15",
+      "value": 36.233,
+      "timestamp": "2026-10-09 14:15:00",
+      "tag": "GX.DEMO.OCR_3",
+      "row_index": 2
+    },
+    {
+      "time_label": "14:30",
+      "value": 69.895,
+      "timestamp": "2026-10-09 14:30:00",
+      "tag": "GX.DEMO.OCR_3",
+      "row_index": 2
+    },
+    {
+      "time_label": "14:45",
+      "value": 78.289,
+      "timestamp": "2026-10-09 14:45:00",
+      "tag": "GX.DEMO.OCR_3",
+      "row_index": 2
+    }
+  ],
+  "best_table_path": "D:\\yw\\gx-ocr\\ocr-page\\data\\ocr_runs\\single\\20261015_093207_408\\best_table.jpg",
+  "best_table_url": "/data/ocr_runs/single/20261015_093207_408/best_table.jpg",
+  "candidate_urls": [
+    "/data/ocr_runs/single/20261015_093207_408/date_crop.jpg",
+    "/data/ocr_runs/single/20261015_093207_408/date_locate.jpg",
+    "/data/ocr_runs/single/20261015_093207_408/date_crop_best.jpg",
+    "/data/ocr_runs/single/20261015_093207_408/cand_table_auto.jpg",
+    "/data/ocr_runs/single/20261015_093207_408/best_table.jpg"
+  ],
+  "candidates": [
+    {
+      "index": 0,
+      "label": "table_auto",
+      "name": "cand_table_auto",
+      "crop": null,
+      "status": "winner",
+      "reason": "综合最优（cand_table_auto）：表头质量=21，实心行=3，密度=120；同分时优先更紧裁剪",
+      "score": [
+        21,
+        3,
+        120,
+        0.4158
+      ],
+      "headers": [
+        "09:45",
+        "10:00",
+        "10:15",
+        "10:30",
+        "10:45",
+        "11:00",
+        "11:15",
+        "11:30",
+        "11:45",
+        "12:00",
+        "12:15",
+        "12:30",
+        "12:45",
+        "13:00",
+        "13:15",
+        "13:30",
+        "13:45",
+        "14:00",
+        "14:15",
+        "14:30",
+        "14:45"
+      ],
+      "rows": [
+        [
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0"
+        ],
+        [
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0"
+        ],
+        [
+          "91.92",
+          "100.615",
+          "85.709",
+          "85.305",
+          "85.479",
+          "85.105",
+          "85.112",
+          "85.1",
+          "85.501",
+          "69.67",
+          "85.799",
+          "69.718",
+          "36.06",
+          "36.065",
+          "35.96",
+          "36.304",
+          "33.812",
+          "34.437",
+          "36.233",
+          "69.895",
+          "78.289"
+        ]
+      ],
+      "point_count": 63,
+      "gap_filled": 0,
+      "gap_fill_map": [],
+      "image_path": "D:\\yw\\gx-ocr\\ocr-page\\data\\ocr_runs\\single\\20261015_093207_408\\cand_table_auto.jpg",
+      "image_url": "/data/ocr_runs/single/20261015_093207_408/cand_table_auto.jpg"
+    },
+    {
+      "index": 1,
+      "label": "table_fixed",
+      "name": "cand_table_fixed",
+      "crop": [
+        0.1,
+        0.52,
+        0.995,
+        0.9
+      ],
+      "status": "skipped",
+      "reason": "未参与比较：已提前选出足够好的候选（胜出者 cand_table_auto）",
+      "score": null,
+      "headers": [],
+      "rows": [],
+      "point_count": 0,
+      "gap_filled": 0,
+      "gap_fill_map": [],
+      "image_path": "",
+      "image_url": ""
+    }
+  ],
+  "ocr_filled": 63,
+  "expected_cells": 63,
+  "base_date": "2026-10-10",
+  "date_source": "ocr",
+  "date_ocr": {
+    "ok": true,
+    "date_str": "2026-10-10",
+    "raw_texts": [
+      "日期",
+      "2026-10-10"
+    ],
+    "crop": [
+      0.2054,
+      0.2493,
+      0.4468,
+      0.3057
+    ],
+    "image_path": "D:\\yw\\gx-ocr\\ocr-page\\data\\ocr_runs\\single\\20261015_093207_408\\date_crop.jpg",
+    "best_image_path": "D:\\yw\\gx-ocr\\ocr-page\\data\\ocr_runs\\single\\20261015_093207_408\\date_crop_best.jpg",
+    "candidate_image_paths": [
+      "D:\\yw\\gx-ocr\\ocr-page\\data\\ocr_runs\\single\\20261015_093207_408\\date_locate.jpg",
+      "D:\\yw\\gx-ocr\\ocr-page\\data\\ocr_runs\\single\\20261015_093207_408\\date_crop.jpg"
+    ],
+    "reason": "full_ymd_auto_locate#0",
+    "attempts": [
+      {
+        "crop": [
+          0.2054,
+          0.2493,
+          0.4468,
+          0.3057
+        ],
+        "texts": [
+          "日期",
+          "2026-10-10"
+        ],
+        "ok": true,
+        "enhance": false,
+        "date_str": "2026-10-10",
+        "confidence": 3,
+        "image_path": "D:\\yw\\gx-ocr\\ocr-page\\data\\ocr_runs\\single\\20261015_093207_408\\date_crop.jpg",
+        "phase": 0,
+        "stage": "auto_main",
+        "crop_index": 0,
+        "local_index": 0
+      }
+    ],
+    "locate": {
+      "crop": [
+        0.2054,
+        0.2493,
+        0.4468,
+        0.3057
+      ],
+      "search": [
+        0.02,
+        0.02,
+        0.5,
+        0.5
+      ],
+      "label_box": [
+        488.75048355261487,
+        344.7562548842469,
+        529.0150926113129,
+        367.2535602645784
+      ],
+      "image_path": "D:\\yw\\gx-ocr\\ocr-page\\data\\ocr_runs\\single\\20261015_093207_408\\date_locate.jpg",
+      "method": "label"
+    },
+    "confidence": 3,
+    "image_url": "/data/ocr_runs/single/20261015_093207_408/date_crop.jpg",
+    "best_image_url": "/data/ocr_runs/single/20261015_093207_408/date_crop_best.jpg"
+  },
+  "date_reason_label": "自定位主框认出完整日期",
+  "date_crop_path": "D:\\yw\\gx-ocr\\ocr-page\\data\\ocr_runs\\single\\20261015_093207_408\\date_crop.jpg",
+  "date_crop_url": "/data/ocr_runs/single/20261015_093207_408/date_crop.jpg",
+  "date_best_path": "D:\\yw\\gx-ocr\\ocr-page\\data\\ocr_runs\\single\\20261015_093207_408\\date_crop_best.jpg",
+  "date_best_url": "/data/ocr_runs/single/20261015_093207_408/date_crop_best.jpg",
+  "date_stages": [
+    {
+      "key": "locate_main",
+      "title": "1. 自定位 OCR主框",
+      "hint": "定位筛选框 + 送入 OCR 的主裁剪（2 张）",
+      "ok": true,
+      "items": [
+        {
+          "name": "date_locate.jpg",
+          "image_path": "D:\\yw\\gx-ocr\\ocr-page\\data\\ocr_runs\\single\\20261015_093207_408\\date_locate.jpg",
+          "image_url": "/data/ocr_runs/single/20261015_093207_408/date_locate.jpg",
+          "label": "定位框",
+          "hint": "auto 找到的日期+筛选框",
+          "role": "locate",
+          "stage": "locate_main",
+          "ok": true,
+          "is_best": false,
+          "skipped": "",
+          "date_str": "",
+          "index": 0
+        },
+        {
+          "name": "date_crop.jpg",
+          "image_path": "D:\\yw\\gx-ocr\\ocr-page\\data\\ocr_runs\\single\\20261015_093207_408\\date_crop.jpg",
+          "image_url": "/data/ocr_runs/single/20261015_093207_408/date_crop.jpg",
+          "label": "OCR 主框",
+          "hint": "自定位主框送入日期 OCR · 本步认出日期",
+          "role": "crop",
+          "stage": "locate_main",
+          "ok": true,
+          "is_best": true,
+          "skipped": "",
+          "date_str": "2026-10-10",
+          "index": 1
+        }
+      ]
+    }
+  ],
+  "date_steps": [
+    {
+      "name": "date_locate.jpg",
+      "image_path": "D:\\yw\\gx-ocr\\ocr-page\\data\\ocr_runs\\single\\20261015_093207_408\\date_locate.jpg",
+      "image_url": "/data/ocr_runs/single/20261015_093207_408/date_locate.jpg",
+      "label": "定位框",
+      "hint": "auto 找到的日期+筛选框",
+      "role": "locate",
+      "stage": "locate_main",
+      "ok": true,
+      "is_best": false,
+      "skipped": "",
+      "date_str": "",
+      "index": 0
+    },
+    {
+      "name": "date_crop.jpg",
+      "image_path": "D:\\yw\\gx-ocr\\ocr-page\\data\\ocr_runs\\single\\20261015_093207_408\\date_crop.jpg",
+      "image_url": "/data/ocr_runs/single/20261015_093207_408/date_crop.jpg",
+      "label": "OCR 主框",
+      "hint": "自定位主框送入日期 OCR · 本步认出日期",
+      "role": "crop",
+      "stage": "locate_main",
+      "ok": true,
+      "is_best": true,
+      "skipped": "",
+      "date_str": "2026-10-10",
+      "index": 1
+    }
+  ],
+  "date_candidates": [
+    {
+      "name": "date_locate.jpg",
+      "image_path": "D:\\yw\\gx-ocr\\ocr-page\\data\\ocr_runs\\single\\20261015_093207_408\\date_locate.jpg",
+      "image_url": "/data/ocr_runs/single/20261015_093207_408/date_locate.jpg",
+      "label": "定位框",
+      "hint": "auto 找到的日期+筛选框",
+      "role": "locate",
+      "stage": "locate_main",
+      "ok": true,
+      "is_best": false,
+      "skipped": "",
+      "date_str": "",
+      "index": 0
+    },
+    {
+      "name": "date_crop.jpg",
+      "image_path": "D:\\yw\\gx-ocr\\ocr-page\\data\\ocr_runs\\single\\20261015_093207_408\\date_crop.jpg",
+      "image_url": "/data/ocr_runs/single/20261015_093207_408/date_crop.jpg",
+      "label": "OCR 主框",
+      "hint": "自定位主框送入日期 OCR · 本步认出日期",
+      "role": "crop",
+      "stage": "locate_main",
+      "ok": true,
+      "is_best": true,
+      "skipped": "",
+      "date_str": "2026-10-10",
+      "index": 1
+    }
+  ]
+}

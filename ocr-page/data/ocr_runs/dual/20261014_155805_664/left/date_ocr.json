@@ -1,0 +1,71 @@
+{
+  "base_date": "2026-10-14",
+  "date_source": "ocr",
+  "date_ocr": {
+    "ok": true,
+    "date_str": "2026-10-14",
+    "raw_texts": [
+      "日期",
+      "2026-10-14"
+    ],
+    "crop": [
+      0.1324,
+      0.2652,
+      0.5211,
+      0.3217
+    ],
+    "image_path": "D:\\yw\\gx-ocr\\ocr-page\\data\\ocr_runs\\dual\\20261014_155805_664\\left\\date_crop.jpg",
+    "best_image_path": "D:\\yw\\gx-ocr\\ocr-page\\data\\ocr_runs\\dual\\20261014_155805_664\\left\\date_crop_best.jpg",
+    "candidate_image_paths": [
+      "D:\\yw\\gx-ocr\\ocr-page\\data\\ocr_runs\\dual\\20261014_155805_664\\left\\date_locate.jpg",
+      "D:\\yw\\gx-ocr\\ocr-page\\data\\ocr_runs\\dual\\20261014_155805_664\\left\\date_crop.jpg"
+    ],
+    "reason": "full_ymd_auto_locate#0",
+    "attempts": [
+      {
+        "crop": [
+          0.1324,
+          0.2652,
+          0.5211,
+          0.3217
+        ],
+        "texts": [
+          "日期",
+          "2026-10-14"
+        ],
+        "ok": true,
+        "enhance": false,
+        "date_str": "2026-10-14",
+        "confidence": 3,
+        "image_path": "D:\\yw\\gx-ocr\\ocr-page\\data\\ocr_runs\\dual\\20261014_155805_664\\left\\date_crop.jpg",
+        "phase": 0,
+        "stage": "auto_main",
+        "crop_index": 0,
+        "local_index": 0
+      }
+    ],
+    "locate": {
+      "crop": [
+        0.1324,
+        0.2652,
+        0.5211,
+        0.3217
+      ],
+      "search": [
+        0.0,
+        0.06,
+        0.72,
+        0.42
+      ],
+      "label_box": [
+        150.3595263724435,
+        310.0,
+        189.14908503767492,
+        332.8
+      ],
+      "image_path": "D:\\yw\\gx-ocr\\ocr-page\\data\\ocr_runs\\dual\\20261014_155805_664\\left\\date_locate.jpg",
+      "method": "label"
+    },
+    "confidence": 3
+  }
+}

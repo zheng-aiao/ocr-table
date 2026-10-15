@@ -2167,6 +2167,7 @@ def extract_points_from_image(
     debug_dir: Optional[Path] = None,
     layout: str = "single",
     sanitize: Optional[Dict[str, Any]] = None,
+    fix_decimal: Optional[Dict[str, Any]] = None,
     early_stop: bool = False,
     early_stop_min_density: int = 70,
     skip_full_when_ok: bool = False,
@@ -2199,10 +2200,18 @@ def extract_points_from_image(
     except (TypeError, ValueError):
         dens_need = 70
     dens_need = max(50, min(100, dens_need))
+    if fix_decimal is None:
+        try:
+            from .config import get_ocr_fix_decimal_cfg
+
+            fix_decimal = get_ocr_fix_decimal_cfg()
+        except Exception:
+            fix_decimal = {"enabled": True}
     extractor_kw: Dict[str, Any] = {
         "scale": scale,
         "min_confidence": min_confidence,
         "sanitize": sanitize,
+        "fix_decimal": fix_decimal,
     }
     if max_ocr_width is not None:
         extractor_kw["max_ocr_width"] = max_ocr_width
@@ -2372,24 +2381,13 @@ def extract_points_from_image(
             for c in row:
                 if c is None or not str(c).strip():
                     return False
-        # 电价行（末行）仍有漏点 4 位整数或疑似串位长整数部 → 不 early_stop
+        # 电价行仅拦明确漏点（无点 4 位整数）。带点高价（如 313.x）是合法业务值，
+        # 串位/粘连已由纠偏、列中心归格、可疑格重识等处理，不再用 long_int 挡 early_stop。
         price = row_list[-1]
-        undotted4 = 0
-        long_int = 0
         for c in price:
             s = str(c).strip().replace("−", "-").replace("–", "-")
             if re.fullmatch(r"-?\d{4}", s):
-                undotted4 += 1
-            elif "." in s:
-                try:
-                    fv = abs(float(s))
-                except ValueError:
-                    continue
-                ip = s.lstrip("-").split(".", 1)[0]
-                if len(re.sub(r"\D", "", ip)) >= 3 and fv >= 80:
-                    long_int += 1
-        if undotted4 >= 1 or long_int >= 2:
-            return False
+                return False
         return True
 
     t_table = time.perf_counter()

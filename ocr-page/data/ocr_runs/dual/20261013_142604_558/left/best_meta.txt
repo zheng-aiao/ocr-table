@@ -1,4 +1,0 @@
-date_source=failed
-reason=date_not_found
-message=未识别到左上角日期筛选框中的业务日期，已跳过表格 OCR；OCR 原文：L贝 / 新平#61一实时电能市场发布信息 / JX / 新平61一实时电能市场发布信息 / 新华61一实时电能市场发布信息 / 贝 / 市 / JX
-table_ocr_skipped=1

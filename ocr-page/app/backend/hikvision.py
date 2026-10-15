@@ -17,34 +17,22 @@ from typing import Any, Dict, List, Optional, Tuple
 import requests
 from requests.auth import HTTPBasicAuth, HTTPDigestAuth
 
+from .camera_common import (
+    HikvisionCaptureError,
+    format_capture_stem,
+    unique_time_path as _unique_time_path,
+)
+
 logger = logging.getLogger(__name__)
 
-
-class HikvisionCaptureError(RuntimeError):
-    pass
-
-
-def format_capture_stem(when: Optional[datetime] = None) -> str:
-    """
-    抓图文件名主干：H-MM（如 9-09、10-20）。
-    Windows 文件名不能含 ':'，用 '-' 代替；日期由外层 YYYYMMDD 目录表达。
-    """
-    now = when or datetime.now()
-    return f"{now.hour}-{now.minute:02d}"
-
-
-def _unique_time_path(out_dir: Path, when: Optional[datetime] = None) -> Path:
-    """生成不冲突的抓图路径：优先 9-09.jpg，同分钟重复则 9-09_2.jpg …"""
-    stem = format_capture_stem(when)
-    path = out_dir / f"{stem}.jpg"
-    if not path.exists():
-        return path
-    n = 2
-    while True:
-        cand = out_dir / f"{stem}_{n}.jpg"
-        if not cand.exists():
-            return cand
-        n += 1
+# 兼容旧 import：from app.backend.hikvision import HikvisionCaptureError, format_capture_stem
+__all__ = [
+    "HikvisionCaptureError",
+    "HikvisionIsapiClient",
+    "build_camera_client",
+    "format_capture_stem",
+    "normalize_stream_channel",
+]
 
 
 def normalize_stream_channel(channel: str | int) -> str:
@@ -170,12 +158,30 @@ class HikvisionIsapiClient:
         raise HikvisionCaptureError(last_err or "抓图失败：未知错误")
 
 
-def build_camera_client(cfg: Dict[str, Any], root_dir: Path) -> HikvisionIsapiClient:
+def build_camera_client(cfg: Dict[str, Any], root_dir: Path):
+    """按 camera.type 构建抓图客户端。
+
+    - mvs / gige / hikrobot：海康机器人 GigE（MVS SDK）
+    - isapi（默认）：海康监控机 HTTP ISAPI
+    """
     from .config import resolve_project_path
 
     cam = cfg.get("camera", {})
     cap = cfg.get("capture", {})
     capture_dir = resolve_project_path(cap.get("dir", "data/captures"))
+    ctype = str(cam.get("type", "isapi") or "isapi").strip().lower()
+
+    if ctype in ("mvs", "gige", "hikrobot"):
+        from .hikrobot_mvs import HikrobotMvsClient
+
+        return HikrobotMvsClient(
+            host=str(cam.get("host", "127.0.0.1")),
+            timeout_sec=float(cam.get("timeout_sec", 15)),
+            capture_dir=str(capture_dir),
+            net_export=str(cam.get("net_export", "") or ""),
+            jpeg_quality=int(cam.get("jpeg_quality", 80)),
+        )
+
     return HikvisionIsapiClient(
         host=cam.get("host", "127.0.0.1"),
         port=int(cam.get("port", 80)),

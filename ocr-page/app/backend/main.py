@@ -33,6 +33,7 @@ from fastapi import FastAPI, File, HTTPException, Query, UploadFile
 from fastapi.responses import FileResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
+from starlette.concurrency import run_in_threadpool
 
 from .config import (
     DATA_DIR,
@@ -94,12 +95,32 @@ RUNS_DIR = DATA_DIR / "runs"
 RUNS_DIR.mkdir(parents=True, exist_ok=True)
 
 
+def _lower_process_priority() -> None:
+    """识别与网页同机时，降低本进程优先级，避免 OCR 抢光 CPU 导致浏览器卡死。"""
+    try:
+        if sys.platform == "win32":
+            import ctypes
+
+            # BELOW_NORMAL_PRIORITY_CLASS = 0x00004000
+            ctypes.windll.kernel32.SetPriorityClass(
+                ctypes.windll.kernel32.GetCurrentProcess(),
+                0x00004000,
+            )
+            logger.info("process priority set to BELOW_NORMAL (UI stays responsive during OCR)")
+        else:
+            os.nice(5)
+            logger.info("process nice raised by 5 (UI stays responsive during OCR)")
+    except Exception as e:
+        logger.warning("failed to lower process priority: %s", e)
+
+
 @app.on_event("startup")
 def _startup() -> None:
     from .config import resolve_ocr_artifacts_root
     from .scheduler import start_scheduler
 
     load_config()
+    _lower_process_priority()
     n = get_ocr_onnx_threads()
     for k in (
         "OMP_NUM_THREADS",
@@ -332,7 +353,9 @@ async def api_ocr_dual_upload(
             tmp.write(content)
             tmp_path = Path(tmp.name)
         upload_name = file.filename or "upload"
-        result = split_and_ocr(
+        # 同步 OCR 必须进线程池，否则会堵死事件循环，历史页 /api/runs 全部无响应
+        result = await run_in_threadpool(
+            split_and_ocr,
             str(tmp_path),
             base_date=_parse_base_date(base_date),
             left_date=_parse_base_date(left_date),
@@ -379,8 +402,12 @@ async def api_ocr_upload(file: UploadFile = File(...)):
             tmp.write(content)
             tmp_path = Path(tmp.name)
         upload_name = file.filename or "upload"
-        result = ocr_only(
-            str(tmp_path), trigger="debug", upload_name=upload_name
+        # 同步 OCR 必须进线程池，否则会堵死事件循环，历史页 /api/runs 全部无响应
+        result = await run_in_threadpool(
+            ocr_only,
+            str(tmp_path),
+            trigger="debug",
+            upload_name=upload_name,
         )
         result["upload_name"] = upload_name
         result["image_path"] = result.get("source_copy") or upload_name

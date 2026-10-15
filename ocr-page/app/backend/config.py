@@ -297,6 +297,25 @@ def resolve_ocr_artifacts_root(cfg: Optional[Dict[str, Any]] = None) -> Path:
     return p
 
 
+def get_pi_value_max(cfg: Optional[Dict[str, Any]] = None) -> Optional[float]:
+    """
+    PI 写入绝对值上限（pi.value_max）。
+    |value| 超出则该点跳过不写库；OCR/前端展示不受影响。
+    未配置或 <=0 表示不限制。
+    """
+    cfg = cfg or get_config()
+    raw = (cfg.get("pi") or {}).get("value_max")
+    if raw in (None, ""):
+        return None
+    try:
+        v = float(raw)
+    except (TypeError, ValueError):
+        return None
+    if v <= 0:
+        return None
+    return v
+
+
 def get_pi_date_back_days(cfg: Optional[Dict[str, Any]] = None) -> int:
     """OCR 识别日相对写 PI 日期提前的天数：1=提前一天，0=当天不提前。"""
     cfg = cfg or get_config()
@@ -386,9 +405,9 @@ def get_ocr_table_crop(
 
 
 def get_ocr_parallel_sides(cfg: Optional[Dict[str, Any]] = None) -> bool:
-    """双屏左右 OCR 是否并行（默认开；不影响识别结果）。"""
+    """双屏左右 OCR 是否并行（默认关：同机浏览网页更顺；不影响识别结果）。"""
     cfg = cfg or get_config()
-    return bool((cfg.get("ocr") or {}).get("parallel_sides", True))
+    return bool((cfg.get("ocr") or {}).get("parallel_sides", False))
 
 
 def get_ocr_max_width(cfg: Optional[Dict[str, Any]] = None) -> Optional[int]:
@@ -417,6 +436,9 @@ def get_ocr_onnx_threads(cfg: Optional[Dict[str, Any]] = None) -> int:
     """
     RapidOCR/ONNX 每会话 CPU 线程数（默认 2）。
     默认 -1 会占满全部核心，双屏并行时整机卡顿、浏览器打开网页极慢。
+
+    自动按逻辑核预算：识别最多用一半核，并按 parallel_sides 分摊到左右会话，
+    给浏览器 / uvicorn 留出余量。
     """
     cfg = cfg or get_config()
     try:
@@ -425,8 +447,13 @@ def get_ocr_onnx_threads(cfg: Optional[Dict[str, Any]] = None) -> int:
         n = 2
     import os
 
-    cpu_n = os.cpu_count() or 4
-    return max(1, min(n, cpu_n))
+    cpu_n = max(1, os.cpu_count() or 4)
+    # 同机浏览历史页时，OCR 最多吃一半逻辑核（至少留 2；双核机留 1）
+    reserve = 2 if cpu_n >= 4 else 1
+    budget = max(1, cpu_n - reserve)
+    sides = 2 if get_ocr_parallel_sides(cfg) else 1
+    max_per_side = max(1, budget // sides)
+    return max(1, min(n, max_per_side))
 
 
 # 日期 OCR：enabled / scale 固定写死；优先自动找「日期」标签，date_crop 仅作回退
@@ -508,6 +535,30 @@ def get_ocr_date_cfg(
         "layout": mode,
         "side": side,
         "auto_locate": auto_locate,
+    }
+
+
+def get_ocr_fix_decimal_cfg(cfg: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """
+    OCR 小数点补点后处理配置。
+    返回：enabled / ratio_k。
+    false 时保留 OCR 原文（不猜补 5/6 位小数点、不做电价行 4 位 d.ddd）。
+    5 位无点：双候选 + 同行/邻格选优，最优相对误差 > ratio_k 则拒补。
+    配置缺失时默认 enabled=true（与历史行为一致）。
+    """
+    cfg = cfg or get_config()
+    raw = (cfg.get("ocr") or {}).get("fix_decimal") or {}
+    if isinstance(raw, bool):
+        return {"enabled": raw, "ratio_k": 3.0}
+    if not isinstance(raw, dict):
+        raw = {}
+    try:
+        ratio_k = max(1.0, float(raw.get("ratio_k", 3.0)))
+    except (TypeError, ValueError):
+        ratio_k = 3.0
+    return {
+        "enabled": bool(raw.get("enabled", True)),
+        "ratio_k": ratio_k,
     }
 
 

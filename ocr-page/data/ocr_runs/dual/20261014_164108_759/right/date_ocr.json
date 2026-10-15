@@ -1,0 +1,96 @@
+{
+  "ok": false,
+  "base_date": null,
+  "date_source": "failed",
+  "date_ocr": {
+    "ok": false,
+    "date_str": null,
+    "raw_texts": [],
+    "crop": [
+      0.0,
+      0.16,
+      0.48,
+      0.26
+    ],
+    "image_path": "D:\\yw\\gx-ocr\\ocr-page\\data\\ocr_runs\\dual\\20261014_164108_759\\right\\date_crop_cfg.jpg",
+    "best_image_path": "",
+    "candidate_image_paths": [
+      "D:\\yw\\gx-ocr\\ocr-page\\data\\ocr_runs\\dual\\20261014_164108_759\\right\\date_crop_cfg.jpg",
+      "D:\\yw\\gx-ocr\\ocr-page\\data\\ocr_runs\\dual\\20261014_164108_759\\right\\date_crop_cfg_enlarge_01.jpg"
+    ],
+    "reason": "date_not_found",
+    "attempts": [
+      {
+        "crop": [
+          0.0,
+          0.16,
+          0.48,
+          0.26
+        ],
+        "texts": [],
+        "ok": false,
+        "enhance": false,
+        "phase": 0,
+        "stage": "config_fallback",
+        "crop_index": 0,
+        "local_index": 0,
+        "image_path": "D:\\yw\\gx-ocr\\ocr-page\\data\\ocr_runs\\dual\\20261014_164108_759\\right\\date_crop_cfg.jpg"
+      },
+      {
+        "crop": [
+          0.0,
+          0.13,
+          0.52,
+          0.3
+        ],
+        "texts": [],
+        "ok": false,
+        "enhance": false,
+        "phase": 0,
+        "stage": "config_fallback",
+        "crop_index": 1,
+        "local_index": 1,
+        "image_path": "D:\\yw\\gx-ocr\\ocr-page\\data\\ocr_runs\\dual\\20261014_164108_759\\right\\date_crop_cfg_enlarge_01.jpg"
+      },
+      {
+        "crop": [
+          0.0,
+          0.16,
+          0.48,
+          0.26
+        ],
+        "texts": [],
+        "ok": false,
+        "enhance": true,
+        "phase": 0,
+        "stage": "config_fallback",
+        "crop_index": 0,
+        "local_index": 0,
+        "image_path": "D:\\yw\\gx-ocr\\ocr-page\\data\\ocr_runs\\dual\\20261014_164108_759\\right\\date_crop_cfg.jpg"
+      },
+      {
+        "crop": [
+          0.0,
+          0.13,
+          0.52,
+          0.3
+        ],
+        "texts": [],
+        "ok": false,
+        "enhance": true,
+        "phase": 0,
+        "stage": "config_fallback",
+        "crop_index": 1,
+        "local_index": 1,
+        "image_path": "D:\\yw\\gx-ocr\\ocr-page\\data\\ocr_runs\\dual\\20261014_164108_759\\right\\date_crop_cfg_enlarge_01.jpg"
+      }
+    ],
+    "locate": {
+      "ok": false
+    },
+    "message": "未识别到左上角日期筛选框中的业务日期，已跳过表格 OCR"
+  },
+  "reason": "date_not_found",
+  "message": "未识别到左上角日期筛选框中的业务日期，已跳过表格 OCR",
+  "table_ocr_skipped": true
+}

@@ -123,6 +123,7 @@ class TableImageExtractor:
         scale: float = 2.5,
         min_confidence: float = 0.25,
         sanitize: Optional[Dict[str, Any]] = None,
+        fix_decimal: Optional[Dict[str, Any]] = None,
         max_ocr_width: Optional[int] = None,
         onnx_threads: Optional[int] = None,
     ):
@@ -130,6 +131,7 @@ class TableImageExtractor:
         @param scale          识别前放大倍数，宽表建议 2.5
         @param min_confidence OCR 最低置信度
         @param sanitize       同行量级清洗配置（见 config.yaml ocr.sanitize）
+        @param fix_decimal    小数点补点配置（见 config.yaml ocr.fix_decimal）
         @param max_ocr_width  放大后最大宽度（像素），默认 MAX_OCR_WIDTH
         @param onnx_threads   ONNX 每会话 intra 线程数；默认 2，避免占满 CPU 拖慢浏览器
         """
@@ -145,10 +147,13 @@ class TableImageExtractor:
         else:
             self.max_ocr_width = self.MAX_OCR_WIDTH
         try:
-            nt = int(onnx_threads) if onnx_threads is not None else 2
+            nt = int(onnx_threads) if onnx_threads is not None else 1
         except (TypeError, ValueError):
-            nt = 2
-        self.onnx_threads = max(1, min(nt, os.cpu_count() or 4))
+            nt = 1
+        # 同机浏览网页时勿吃满逻辑核：最多用一半（至少留 1～2）
+        cpu_n = max(1, os.cpu_count() or 4)
+        reserve = 2 if cpu_n >= 4 else 1
+        self.onnx_threads = max(1, min(nt, cpu_n - reserve, cpu_n))
         raw = sanitize if isinstance(sanitize, dict) else {}
         self.sanitize_enabled = bool(raw.get("enabled", True))
         try:
@@ -162,6 +167,22 @@ class TableImageExtractor:
         # 位数众数相关配置已废弃，保留属性以免旧调用报错
         self.sanitize_majority_ratio = 0.5
         self.sanitize_boundary_pct = 0.15
+        if isinstance(fix_decimal, bool):
+            self.fix_decimal_enabled = fix_decimal
+            self.fix_decimal_ratio_k = 3.0
+        elif isinstance(fix_decimal, dict):
+            self.fix_decimal_enabled = bool(fix_decimal.get("enabled", True))
+            try:
+                self.fix_decimal_ratio_k = max(
+                    1.0, float(fix_decimal.get("ratio_k", 3.0))
+                )
+            except (TypeError, ValueError):
+                self.fix_decimal_ratio_k = 3.0
+        else:
+            self.fix_decimal_enabled = True
+            self.fix_decimal_ratio_k = 3.0
+        # 5 位双候选得分接近时的破平阈值（相对误差差）
+        self.fix_decimal_tie_eps = 0.15
         # 最近一次 auto 裁剪的比例框 (x0,y0,x1,y1)，供上游竞选打分
         self.last_auto_crop_ratio: Optional[Tuple[float, float, float, float]] = None
 
@@ -673,6 +694,10 @@ class TableImageExtractor:
         matrix = self._refill_matrix_empties(
             img, matrix, rows, header_idx, data_idx, data_cells, col_centers
         )
+        # 引擎宽框粘连：不按位数猜拆，对被盖住的列做单列裁剪 OCR
+        matrix = self._reocr_geometry_sticky_cells(
+            img, matrix, rows, header_idx, data_idx, data_cells, col_centers
+        )
         # 电价行可疑已填格（漏点/串位）按列强制重识，可覆盖错值
         matrix = self._reocr_suspicious_price_cells(
             img, matrix, rows, header_idx, data_idx, data_cells, col_centers
@@ -688,8 +713,9 @@ class TableImageExtractor:
         )
         # 电力/计划（整型）与电价（小数）混行时拆开
         matrix = self._untangle_integer_decimal_rows(matrix)
-        # 电价行漏点补救（5/6 位已在 _fix_decimal_ocr；此处补 4 位 d.ddd）
-        matrix = [self._repair_price_row_lost_dots(r) for r in matrix]
+        # 漏点补救：5 位同行选优 → 4 位电价 d.ddd（6 位已在 _fix_decimal_ocr）
+        if self.fix_decimal_enabled:
+            matrix = [self._apply_decimal_row_repairs(r) for r in matrix]
         ocr_filled = self._count_numeric_cells(matrix)
 
         return TableExtractResult(
@@ -1029,8 +1055,10 @@ class TableImageExtractor:
                 best_idx = idx
                 best_times = times
 
-        # 单行不足时：只合并 Y 很近的邻行（避免把曲线轴时刻并进表头）
-        if 1 <= len(best_times) < 4 and best_idx >= 0:
+        # 合并 Y 很近的邻行时刻：斜拍时左/右缘表头常被拆到邻行（如 09:30），
+        # 旧逻辑仅在单行 <4 列时合并，主行已够长时会丢贴边列。
+        # y_tol 仍卡死曲线轴（通常远在上方）。
+        if best_idx >= 0 and best_times:
             base_y = self._row_y_center(rows[best_idx])
             y_tol = 28.0
             if rows[best_idx]:
@@ -1039,30 +1067,34 @@ class TableImageExtractor:
                     float(np.median([c.height for c in rows[best_idx]])) * 1.6,
                 )
             merged: List[Tuple[str, float]] = list(best_times)
-            for idx in range(max(0, best_idx - 1), min(len(rows), best_idx + 2)):
+            for idx, row in enumerate(rows):
                 if idx == best_idx:
                     continue
-                if abs(self._row_y_center(rows[idx]) - base_y) > y_tol:
+                if abs(self._row_y_center(row) - base_y) > y_tol:
                     continue
-                merged.extend(self._row_time_candidates(rows[idx]))
-            merged.sort(key=lambda t: t[1])
-            dedup: List[Tuple[str, float]] = []
-            for t, x in merged:
-                if dedup and abs(x - dedup[-1][1]) < 25:
+                # 邻行若几乎全是大步时刻（曲线轴），勿并入
+                neigh = self._row_time_candidates(row)
+                if not neigh:
                     continue
-                dedup.append((t, x))
-            if len(dedup) > len(best_times):
-                best_times = dedup
+                neigh_mins = [
+                    m
+                    for m in (self._time_to_minutes(t) for t, _ in neigh)
+                    if m is not None
+                ]
+                if len(neigh_mins) >= 3:
+                    diffs = [b - a for a, b in zip(sorted(neigh_mins), sorted(neigh_mins)[1:]) if b > a]
+                    near15 = sum(1 for d in diffs if 14 <= d <= 16)
+                    big = sum(1 for d in diffs if d >= 45)
+                    if near15 == 0 and big >= max(1, len(diffs) // 2):
+                        continue
+                merged.extend(neigh)
+            best_times = merged
 
         if len(best_times) < 4:
             return -1, [], []
         best_times.sort(key=lambda t: t[1])  # 严格按列 X
-        # 同 X 去重
-        dedup2: List[Tuple[str, float]] = []
-        for t, x in best_times:
-            if dedup2 and abs(x - dedup2[-1][1]) < 22:
-                continue
-            dedup2.append((t, x))
+        # 同 X 去重：多读时优先续上 Δ=15（修 05:45↔06:45 类互斥误读）
+        dedup2 = self._dedupe_header_times_prefer_delta15(best_times)
         headers = [t[0] for t in dedup2]
         col_centers = [t[1] for t in dedup2]
         headers, col_centers = self._sanitize_header_sequence(headers, col_centers)
@@ -1070,16 +1102,136 @@ class TableImageExtractor:
             return -1, [], []
         return best_idx, headers, col_centers
 
+    def _dedupe_header_times_prefer_delta15(
+        self,
+        times: Sequence[Tuple[str, float]],
+        *,
+        x_tol: float = 22.0,
+    ) -> List[Tuple[str, float]]:
+        """
+        按 X 聚列并去重。同列多读（如 05:45 与 06:45）时：
+        优先能与左侧已定列构成严格 Δ=15 的读法；否则再看右侧邻列提示。
+        """
+        if not times:
+            return []
+        ordered = sorted(times, key=lambda item: item[1])
+        groups: List[List[Tuple[str, float]]] = []
+        for t, x in ordered:
+            if groups and abs(x - groups[-1][-1][1]) < x_tol:
+                groups[-1].append((t, x))
+            else:
+                groups.append([(t, x)])
+
+        resolved: List[Tuple[str, float]] = []
+        for gi, group in enumerate(groups):
+            # 组内按 (label -> 平均 x)
+            by_lab: Dict[str, List[float]] = {}
+            for t, x in group:
+                by_lab.setdefault(t, []).append(float(x))
+            options: List[Tuple[str, float, Optional[int]]] = []
+            for lab, xs in by_lab.items():
+                options.append((lab, float(np.mean(xs)), self._time_to_minutes(lab)))
+            if len(options) == 1:
+                resolved.append((options[0][0], options[0][1]))
+                continue
+
+            prev_m: Optional[int] = None
+            if resolved:
+                prev_m = self._time_to_minutes(resolved[-1][0])
+
+            next_opts: List[Optional[int]] = []
+            if gi + 1 < len(groups):
+                for t2, _x2 in groups[gi + 1]:
+                    next_opts.append(self._time_to_minutes(t2))
+
+            def _score(opt: Tuple[str, float, Optional[int]]) -> Tuple[int, int, int]:
+                lab, _x, m = opt
+                left_fit = 0
+                if prev_m is not None and m is not None and m - prev_m == 15:
+                    left_fit = 2
+                right_fit = 0
+                if m is not None:
+                    for nm in next_opts:
+                        if nm is not None and nm - m == 15:
+                            right_fit = 1
+                            break
+                # 同读次数字多者优先（弱 tie-break）
+                return (left_fit, right_fit, len(by_lab.get(lab, [])))
+
+            best_opt = max(options, key=_score)
+            resolved.append((best_opt[0], best_opt[1]))
+        return resolved
+
     def _longest_delta15_header_indices(
         self,
         headers: Sequence[str],
         col_centers: Optional[Sequence[float]] = None,
     ) -> List[int]:
-        """
-        在按 X 排列的时刻列中，找最长的严格相邻 Δ=15 子序列下标。
+        """兼容旧名：现委托 `_keep_delta15_header_indices`（可保留多段）。"""
+        return self._keep_delta15_header_indices(headers, col_centers)
 
-        纠偏后偶发「左缘误读 16:30 插在 15:15 与 16:00 之间」：若只按前缀截断
-        会只剩 1 列；同分钟去重若保留左侧误读会挤掉右侧真列。子序列可跳过脏列。
+    def _median_header_col_gap(
+        self,
+        xs: Sequence[float],
+        mins: Sequence[Optional[int]],
+    ) -> float:
+        """用已是 Δ=15 的相邻列估计列距；不足则退回全部正间距中位数。"""
+        step_gaps: List[float] = []
+        all_gaps: List[float] = []
+        for i in range(len(xs) - 1):
+            dx = float(xs[i + 1]) - float(xs[i])
+            if dx <= 0:
+                continue
+            all_gaps.append(dx)
+            mi, mj = mins[i], mins[i + 1]
+            if mi is not None and mj is not None and mj - mi == 15:
+                step_gaps.append(dx)
+        if len(step_gaps) >= 2:
+            return float(np.median(step_gaps))
+        if all_gaps:
+            return float(np.median(all_gaps))
+        return 80.0
+
+    def _can_bridge_header_gap(
+        self,
+        m_left: int,
+        m_right: int,
+        x_left: float,
+        x_right: float,
+        med_gap: float,
+        *,
+        max_slots: int = 4,
+    ) -> bool:
+        """
+        两段 Δ=15 链之间是否像「中间漏了若干格 / 夹了脏列」而非无关簇。
+
+        slots = dm/15：2 表示中间缺 1 个刻度（如 05:30→06:00）；不编造缺刻度。
+        """
+        dm = int(m_right) - int(m_left)
+        if dm <= 15 or dm % 15 != 0:
+            return False
+        slots = dm // 15
+        if slots < 2 or slots > max_slots:
+            return False
+        dx = float(x_right) - float(x_left)
+        if dx <= 0:
+            return False
+        if med_gap <= 8:
+            return True
+        expected = float(slots) * float(med_gap)
+        return 0.45 * expected <= dx <= 1.7 * expected
+
+    def _keep_delta15_header_indices(
+        self,
+        headers: Sequence[str],
+        col_centers: Optional[Sequence[float]] = None,
+    ) -> List[int]:
+        """
+        保留可并入同一表头的严格 Δ=15 列（按 X 序）。
+
+        - 丢掉接不上的脏列（如误读成 06:45 插在 05:30 与 06:00 之间）
+        - 若中间仅因误读断开，两端链在列距像「漏格」时**都保留**，不编造中间时刻
+        - 多段无法桥接时，保留列数最多的那一组（避免拼进曲线轴等无关簇）
         """
         n = len(headers)
         if n <= 0:
@@ -1087,34 +1239,65 @@ class TableImageExtractor:
         order = list(range(n))
         if col_centers is not None and len(col_centers) >= n:
             order.sort(key=lambda i: float(col_centers[i]))
+        xs = [
+            float(col_centers[i]) if col_centers is not None and i < len(col_centers) else float(i)
+            for i in order
+        ]
         mins: List[Optional[int]] = [self._time_to_minutes(headers[i]) for i in order]
-        # DP：chain[i] = 以 order[i] 结尾的最长 Δ=15 链
-        length = [1] * n
-        prev = [-1] * n
-        for i in range(n):
-            mi = mins[i]
+        med = self._median_header_col_gap(xs, mins)
+
+        # 1) 切成极大严格 Δ=15 段；单独接不上的点当作 orphan（稍后丢弃）
+        runs: List[List[int]] = []  # 存 order 内下标
+        cur: List[int] = []
+        for pos in range(n):
+            mi = mins[pos]
             if mi is None:
+                if len(cur) >= 2:
+                    runs.append(cur)
+                cur = []
                 continue
-            for j in range(i):
-                mj = mins[j]
-                if mj is None:
-                    continue
-                if mi - mj != 15:
-                    continue
-                if length[j] + 1 > length[i]:
-                    length[i] = length[j] + 1
-                    prev[i] = j
-        best = max(range(n), key=lambda i: (length[i], i))
-        if length[best] < 2:
-            # 构不成链：退回全部合法刻度下标（保持原序）
+            if not cur:
+                cur = [pos]
+                continue
+            prev = cur[-1]
+            mj = mins[prev]
+            if mj is not None and mi - mj == 15:
+                cur.append(pos)
+                continue
+            # 断开：当前段落盘，本点另起
+            if len(cur) >= 2:
+                runs.append(cur)
+            elif len(cur) == 1:
+                # 单点不成链，不进入 runs（视为脏/孤立）
+                pass
+            cur = [pos]
+        if len(cur) >= 2:
+            runs.append(cur)
+
+        if not runs:
+            # 构不成段：退回全部合法刻度（与旧行为接近）
             return [order[i] for i in range(n) if mins[i] is not None]
-        chain_pos: List[int] = []
-        cur = best
-        while cur >= 0:
-            chain_pos.append(cur)
-            cur = prev[cur]
-        chain_pos.reverse()
-        return [order[p] for p in chain_pos]
+
+        # 2) 按 X 序尝试桥接相邻段（中间 orphan 自然被跳过）
+        groups: List[List[int]] = [list(runs[0])]
+        for run in runs[1:]:
+            prev = groups[-1]
+            left, right = prev[-1], run[0]
+            m_l, m_r = mins[left], mins[right]
+            if (
+                m_l is not None
+                and m_r is not None
+                and self._can_bridge_header_gap(m_l, m_r, xs[left], xs[right], med)
+            ):
+                groups[-1].extend(run)
+            else:
+                groups.append(list(run))
+
+        # 3) 取列数最多的一组（同分偏更靠右/更长连续时已由桥接合并）
+        best = max(groups, key=lambda g: (len(g), g[-1] - g[0] if g else 0))
+        if len(best) < 2:
+            return [order[i] for i in range(n) if mins[i] is not None]
+        return [order[p] for p in best]
 
     def _sanitize_header_sequence(
         self,
@@ -1126,7 +1309,7 @@ class TableImageExtractor:
 
         1. 丢掉左侧邻屏漏进来的乱序头（如 03:15 出现在 00:15 之前）
         2. 丢掉与主簇 X 间距过大的左缘孤列
-        3. 取最长严格 Δ=15 子序列（跳过误读/乱序列；同分钟保留链上那一次）
+        3. 保留可桥接的严格 Δ=15 段（中间脏列丢弃；两端不断开只因误读时都保留）
         """
         n = min(len(headers), len(col_centers))
         if n < 2:
@@ -1157,7 +1340,7 @@ class TableImageExtractor:
 
         labs = [p[1] for p in paired]
         xs2 = [p[0] for p in paired]
-        keep = self._longest_delta15_header_indices(labs, xs2)
+        keep = self._keep_delta15_header_indices(labs, xs2)
         if len(keep) >= 2:
             return [labs[i] for i in keep], [xs2[i] for i in keep]
         if len(paired) < 2:
@@ -1197,12 +1380,7 @@ class TableImageExtractor:
             times_all: List[Tuple[str, float]] = []
             for row in rows:
                 times_all.extend(self._row_time_candidates(row))
-            times_all.sort(key=lambda t: t[1])
-            dedup0: List[Tuple[str, float]] = []
-            for t, x in times_all:
-                if dedup0 and abs(x - dedup0[-1][1]) < 25:
-                    continue
-                dedup0.append((t, x))
+            dedup0 = self._dedupe_header_times_prefer_delta15(times_all, x_tol=25.0)
             if len(dedup0) < 4:
                 return [], []
             return self._sanitize_header_sequence(
@@ -1212,11 +1390,7 @@ class TableImageExtractor:
         scored_rows.sort(key=lambda item: item[0], reverse=True)
         times = scored_rows[0][1]
         times.sort(key=lambda t: t[1])
-        dedup: List[Tuple[str, float]] = []
-        for t, x in times:
-            if dedup and abs(x - dedup[-1][1]) < 25:
-                continue
-            dedup.append((t, x))
+        dedup = self._dedupe_header_times_prefer_delta15(times, x_tol=25.0)
         if len(dedup) < 4:
             return [], []
         return self._sanitize_header_sequence(
@@ -1621,11 +1795,14 @@ class TableImageExtractor:
         """
         将粘连 OCR 块拆成多个虚拟单元格（按列宽估算 X）。
 
-        @param row 原始行 OCR 块
-        @return 拆分后的块列表
+        多列检测粘连（一个框盖住多个时刻）禁止按文本猜拆，留给按列局部 OCR。
         """
         result: List[OcrCell] = []
         for cell in row:
+            # 单点/无点 + 超长数字：引擎侧多格粘连，勿 DP/位宽猜拆
+            if self._looks_like_multicolumn_glue_text(cell.text):
+                result.append(cell)
+                continue
             parts = self._split_cell_values(cell.text)
             if len(parts) <= 1:
                 result.append(cell)
@@ -1639,6 +1816,39 @@ class TableImageExtractor:
                     width=max(step * 0.9, 8), height=cell.height,
                 ))
         return result
+
+    @staticmethod
+    def _looks_like_multicolumn_glue_text(text: str) -> bool:
+        """OCR 文本是否像多列粘成一串（非「原文已带多个小数点」）。"""
+        t = (text or "").strip().replace("O", "0").replace("o", "0")
+        t = t.replace("−", "-").replace("–", "-").replace("—", "-")
+        t = re.sub(r"[^\d.\-]", "", t)
+        if not t:
+            return False
+        digits = re.sub(r"[.\-]", "", t)
+        # 已明确多个带点小数：可按文本拆
+        if len(re.findall(r"-?\d{1,4}\.\d{1,3}", t)) >= 2:
+            return False
+        # 数字过长且至多一个点：典型 110.608318857317637
+        return len(digits) >= 10 and t.count(".") <= 1
+
+    def _columns_covered_by_cell(
+        self,
+        cell: "OcrCell",
+        col_centers: Sequence[float],
+        step: float,
+    ) -> List[int]:
+        """检测框几何覆盖到的列中心索引（多列粘连判据）。"""
+        if not col_centers:
+            return []
+        x0 = float(cell.x)
+        x1 = float(cell.x + max(cell.width, 1))
+        pad = max(step * 0.28, 8.0)
+        return [
+            j
+            for j in range(len(col_centers))
+            if (x0 - pad) <= float(col_centers[j]) <= (x1 + pad)
+        ]
 
     def _complete_time_headers(
         self,
@@ -2665,6 +2875,7 @@ class TableImageExtractor:
 
         绝不「从左到右顺序填列」：中间漏识必须留空，不能把右侧数值前移。
         粘连多值块优先按「块覆盖的列中心」落列，不再只按宽度均分。
+        若检测框本身盖住 ≥2 列且文本像多格粘连：不落库，留给按列局部 OCR。
         """
         if not row or col_count <= 0 or not col_centers:
             return []
@@ -2675,6 +2886,10 @@ class TableImageExtractor:
         max_dist = max(step * 0.60, 28.0)
 
         for cell in self._filter_overlap_noise_cells(row):
+            covered = self._columns_covered_by_cell(cell, col_centers, step)
+            # 宽框盖多列 + 粘连文本：拒绝猜拆，对应列保持空
+            if len(covered) >= 2 and self._looks_like_multicolumn_glue_text(cell.text):
+                continue
             parts = self._split_cell_values(cell.text)
             if not parts:
                 continue
@@ -2824,6 +3039,77 @@ class TableImageExtractor:
             )
         return out
 
+    def _reocr_geometry_sticky_cells(
+        self,
+        img: np.ndarray,
+        matrix: List[List[str]],
+        rows: Sequence[List[OcrCell]],
+        header_idx: int,
+        data_idx: int,
+        data_cells: List[OcrCell],
+        col_centers: List[float],
+    ) -> List[List[str]]:
+        """
+        检测框盖住 ≥2 列的引擎粘连：清空被盖列，按列裁剪后重新 OCR。
+
+        不做 5/6 位文本切分；只依赖列几何 + 单格 OCR（与前列能认点同一路径）。
+        """
+        if not matrix or not col_centers or not data_cells:
+            return matrix
+        step = self._median_col_step(col_centers)
+        sticky_cols: List[int] = []
+        for cell in data_cells:
+            covered = self._columns_covered_by_cell(cell, col_centers, step)
+            if len(covered) < 2:
+                continue
+            if not self._looks_like_multicolumn_glue_text(cell.text):
+                continue
+            for j in covered:
+                if j not in sticky_cols:
+                    sticky_cols.append(j)
+        if not sticky_cols:
+            return matrix
+
+        out = [list(r) for r in matrix]
+        bands = self._collect_indicator_bands(
+            rows, header_idx, data_idx, data_cells or []
+        )
+        # 主数据行（电价）优先；同 y 带也可能被宽框污染
+        target_rows = [len(out) - 1]
+        for ri, band in enumerate(bands):
+            if ri >= len(out) or not band:
+                continue
+            for cell in band:
+                covered = self._columns_covered_by_cell(cell, col_centers, step)
+                if len(covered) >= 2 and self._looks_like_multicolumn_glue_text(
+                    cell.text
+                ):
+                    if ri not in target_rows:
+                        target_rows.append(ri)
+                    break
+
+        for ri in target_rows:
+            row = out[ri]
+            cleared = list(row)
+            for j in sticky_cols:
+                if j < len(cleared):
+                    cleared[j] = ""
+            band = bands[ri] if ri < len(bands) and bands[ri] else data_cells
+            filled = self._ocr_fill_empty_cells(
+                img,
+                cleared,
+                col_centers,
+                band,
+                img.shape[1],
+                prefer_sharp=True,
+                trust_cell_ocr=True,
+            )
+            for j in sticky_cols:
+                if j < len(filled) and filled[j]:
+                    row[j] = filled[j]
+            out[ri] = row
+        return out
+
     def _reocr_suspicious_price_cells(
         self,
         img: np.ndarray,
@@ -2960,12 +3246,14 @@ class TableImageExtractor:
         img_width: int,
         *,
         prefer_sharp: bool = False,
+        trust_cell_ocr: bool = False,
     ) -> List[str]:
         """
         对数据行空单元格局部 OCR 补全。
 
         紧裁优先；若检出文本中心更靠近邻列中心，则丢弃（防后列前移补位）。
         prefer_sharp：电价行空格优先用非 fast（锐化/二值）利于小数点。
+        trust_cell_ocr：信任单列 OCR 原文（几何粘连重识用），不做同行量级过滤。
         """
         if not row or not data_cells:
             return row
@@ -3038,9 +3326,15 @@ class TableImageExtractor:
                             found_x - cx
                         ):
                             continue
-                picked = self._pick_fill_candidate([cand], ref_med)
-                if not picked:
-                    continue
+                if trust_cell_ocr:
+                    # 几何粘连：单列 OCR 原文即结果，跳过量级过滤
+                    if self._is_monster_numeric_token(cand):
+                        continue
+                    picked = cand
+                else:
+                    picked = self._pick_fill_candidate([cand], ref_med)
+                    if not picked:
+                        continue
                 stolen = False
                 for nb_i in (col - 1, col + 1):
                     if 0 <= nb_i < len(filled) and self._is_neighbor_fragment(
@@ -3053,7 +3347,11 @@ class TableImageExtractor:
                 best = picked
                 break
             if best:
-                filled[col] = self._fix_decimal_ocr(best) or best
+                # trust_cell_ocr 时保留 OCR 原文（含小数点），不做补点猜测
+                if trust_cell_ocr:
+                    filled[col] = best
+                else:
+                    filled[col] = self._fix_decimal_ocr(best) or best
         return filled
 
     def _is_neighbor_fragment(self, cand: str, neighbor: str) -> bool:
@@ -3354,9 +3652,190 @@ class TableImageExtractor:
                 fixed.append(v)
             result.append(fixed)
         return [
-            self._repair_price_row_lost_dots(self._sanitize_data_row(r))
+            self._apply_decimal_row_repairs(self._sanitize_data_row(r))
             for r in result
         ]
+
+    def _apply_decimal_row_repairs(self, row: List[str]) -> List[str]:
+        """行级小数点补救：先 5 位双候选选优，再 4 位电价 d.ddd。"""
+        if not self.fix_decimal_enabled:
+            return row
+        row = self._repair_five_digit_lost_dots(row)
+        return self._repair_price_row_lost_dots(row)
+
+    def _parse_dotted_cell_value(self, raw: str) -> Optional[float]:
+        """解析已带点的数值格；失败返回 None。"""
+        s = str(raw or "").strip().replace("−", "-").replace("–", "-").replace("—", "-")
+        if not s or s == "-":
+            return None
+        if not re.fullmatch(r"-?\d{1,3}\.\d{1,3}", s):
+            return None
+        try:
+            return abs(float(s))
+        except ValueError:
+            return None
+
+    def _row_fix_decimal_anchors(
+        self, row: Sequence[str], col: int
+    ) -> List[float]:
+        """
+        5 位选优锚点：左右邻带点格 + 同行带点中位数 + 小电价簇中位数。
+
+        邻格只用紧邻（允许真实 15 分钟跳变）；中位数提供全局稳健兜底。
+        """
+        anchors: List[float] = []
+        n = len(row)
+        if 0 <= col - 1 < n:
+            left = self._parse_dotted_cell_value(str(row[col - 1]))
+            if left is not None:
+                anchors.append(left)
+        if 0 <= col + 1 < n:
+            right = self._parse_dotted_cell_value(str(row[col + 1]))
+            if right is not None:
+                anchors.append(right)
+
+        dotted_all: List[float] = []
+        dotted_small: List[float] = []
+        for j, cell in enumerate(row):
+            if j == col:
+                continue
+            fv = self._parse_dotted_cell_value(str(cell))
+            if fv is None:
+                continue
+            dotted_all.append(fv)
+            if fv < 80.0:
+                dotted_small.append(fv)
+        if len(dotted_all) >= 1:
+            anchors.append(float(np.median(dotted_all)))
+        if len(dotted_small) >= 1:
+            anchors.append(float(np.median(dotted_small)))
+        return anchors
+
+    def _row_frac_digit_mode(self, row: Sequence[str], skip_col: int = -1) -> int:
+        """同行已带点格小数位数众数；默认 3（现货电价常见）。"""
+        counts = {2: 0, 3: 0}
+        for j, cell in enumerate(row):
+            if j == skip_col:
+                continue
+            s = str(cell or "").strip()
+            if "." not in s:
+                continue
+            if not re.fullmatch(r"-?\d+\.\d+", s.replace("−", "-").replace("–", "-")):
+                continue
+            frac = s.rsplit(".", 1)[-1]
+            n = len(re.sub(r"\D", "", frac))
+            if n in counts:
+                counts[n] += 1
+        if counts[2] == 0 and counts[3] == 0:
+            return 3
+        return 3 if counts[3] >= counts[2] else 2
+
+    def _row_looks_like_price(self, row: Sequence[str]) -> bool:
+        """小数占比高 → 更像电价行（无锚点时 5 位兜底用）。"""
+        parsed = 0
+        dotted = 0
+        for cell in row:
+            raw = str(cell or "").strip().replace("−", "-").replace("–", "-")
+            if not raw or raw == "-":
+                continue
+            try:
+                float(raw)
+            except ValueError:
+                continue
+            parsed += 1
+            if "." in raw:
+                dotted += 1
+        return parsed >= 3 and dotted / max(parsed, 1) >= 0.4
+
+    @staticmethod
+    def _rel_err_to_anchors(value: float, anchors: Sequence[float]) -> float:
+        """相对最近锚点的误差；无锚点时为 +inf。"""
+        if not anchors:
+            return float("inf")
+        best = float("inf")
+        for a in anchors:
+            denom = max(abs(a), 1e-9)
+            best = min(best, abs(value - a) / denom)
+        return best
+
+    def _pick_five_digit_fix(
+        self,
+        digits: str,
+        row: Sequence[str],
+        col: int,
+        sign: str = "",
+    ) -> Optional[str]:
+        """
+        5 位无点双候选选优：xx.xxx / xxx.xx。
+
+        得分 = 相对所有锚点的 min 相对误差（抗 15 分钟跳变）。
+        最优 > ratio_k → 拒补；两候选接近 → 按小数位数众数破平，仍平则拒补。
+        无锚点：电价行默认 xx.xxx，否则拒补。
+        """
+        if not re.fullmatch(r"\d{5}", digits):
+            return None
+        cand_xx = f"{digits[:2]}.{digits[2:]}"   # xx.xxx
+        cand_xxx = f"{digits[:3]}.{digits[3:]}"  # xxx.xx
+        anchors = self._row_fix_decimal_anchors(row, col)
+        k = self.fix_decimal_ratio_k
+        tie_eps = self.fix_decimal_tie_eps
+
+        if not anchors:
+            if self._row_looks_like_price(row):
+                return f"{sign}{cand_xx}"
+            return None
+
+        scored: List[Tuple[float, str, int]] = []
+        for cand in (cand_xx, cand_xxx):
+            try:
+                fv = abs(float(cand))
+            except ValueError:
+                continue
+            frac_n = len(cand.split(".", 1)[1])
+            scored.append((self._rel_err_to_anchors(fv, anchors), cand, frac_n))
+        if not scored:
+            return None
+        scored.sort(key=lambda item: item[0])
+        best_r, best_c, _ = scored[0]
+        if best_r > k:
+            return None
+        if len(scored) >= 2 and abs(scored[0][0] - scored[1][0]) < tie_eps:
+            prefer = self._row_frac_digit_mode(row, skip_col=col)
+            for r, cand, frac_n in scored:
+                if r <= k and frac_n == prefer:
+                    return f"{sign}{cand}"
+            return None
+        return f"{sign}{best_c}"
+
+    def _repair_five_digit_lost_dots(self, row: List[str]) -> List[str]:
+        """
+        5 位无点漏小数点补救：双候选 + 邻格/同行选优。
+
+        73713 → 在同行像 73.x 时选 73.713，而非旧规则的 737.13。
+        两候选都不像则保留原文。
+        """
+        if not self.fix_decimal_enabled or not row:
+            return row
+        digit5_idxs: List[int] = []
+        for i, cell in enumerate(row):
+            raw = str(cell or "").strip().replace("−", "-").replace("–", "-")
+            if not raw or raw == "-":
+                continue
+            body = raw[1:] if raw.startswith("-") and len(raw) > 1 else raw
+            if re.fullmatch(r"\d{5}", body):
+                digit5_idxs.append(i)
+        if not digit5_idxs:
+            return row
+        # 锚点一律看原始行，避免同批多个 5 位格互相污染
+        out = list(row)
+        for i in digit5_idxs:
+            raw = str(row[i]).strip().replace("−", "-").replace("–", "-")
+            sign = "-" if raw.startswith("-") else ""
+            body = raw[1:] if sign else raw
+            picked = self._pick_five_digit_fix(body, row, i, sign=sign)
+            if picked:
+                out[i] = picked
+        return out
 
     def _repair_price_row_lost_dots(self, row: List[str]) -> List[str]:
         """
@@ -3365,6 +3844,8 @@ class TableImageExtractor:
         4 位无点整数 → d.ddd（3262→3.262、5308→5.308）。
         量级校验优先用「小电价簇」(abs<80)，避免同行大电价把中位拉高导致小值补点失败。
         """
+        if not self.fix_decimal_enabled:
+            return row
         if not row or len(row) < 3:
             return row
         dotted_all: List[float] = []
@@ -3491,10 +3972,10 @@ class TableImageExtractor:
         rows: List[List[str]],
     ) -> Tuple[List[str], List[List[str]]]:
         """
-        去掉尾部全空列，并只保留最长的严格 Δ=15 表头子序列。
+        去掉尾部全空列，并保留可桥接的严格 Δ=15 表头段。
 
         旧逻辑在「首次非 +15」处截断：纠偏后若左缘误读插入乱序时刻，会只剩 1 列
-        → 候选被判 invalid、有效点变 0。改为跳过脏列取最长合法链。
+        → 候选被判 invalid、有效点变 0。现跳过脏列；两端因误读断开时都保留。
         """
         if not headers:
             return headers, rows
@@ -3822,8 +4303,12 @@ class TableImageExtractor:
     def _fix_decimal_ocr(self, num: str) -> str:
         """修正丢失小数点的数字（保留前导负号）。
 
-        仅对「位数齐全、整段无点」做格式恢复（6→xxx.xxx、5 位按量级），
-        不把残缺串硬凑成小数。
+        仅对「位数齐全、整段无点」做单格可判定的格式恢复：
+        - 6 位 → xxx.xxx
+        - 7 位 → 去首/尾后按 6 位试
+        - 5 位不在此猜点（交给 _repair_five_digit_lost_dots 同行选优）
+        - 4 位及以下保持原文（电价 4 位由 _repair_price_row_lost_dots 处理）
+        fix_decimal.enabled=false 时只做符号规范化，不猜补点。
         """
         if not num:
             return ""
@@ -3841,6 +4326,9 @@ class TableImageExtractor:
             return sign + num
         if num == "0":
             return sign + "0" if sign else "0"
+        # 关闭补点：保留 OCR 无点原文，便于评估引擎认点能力
+        if not self.fix_decimal_enabled:
+            return sign + num
         # 6 位：xxx.xxx（281451 → 281.451）
         if re.fullmatch(r"\d{6}", num):
             return sign + num[:-3] + "." + num[-3:]
@@ -3854,16 +4342,7 @@ class TableImageExtractor:
                     continue
                 if 50 <= fv <= 999:
                     return sign + fixed
-        # 5 位：百位整数优先 xxx.xx，否则 xx.xxx
-        if re.fullmatch(r"\d{5}", num):
-            head2 = int(num[:2])
-            head3 = int(num[:3])
-            if head3 >= 200:
-                return sign + num[:3] + "." + num[3:]
-            if head2 <= 25:
-                return sign + num[:2] + "." + num[2:]
-            return sign + num[:3] + "." + num[3:]
-        # 4 位及以下：保持原文，不猜点
+        # 5 位及以下：单格不猜；5 位行级选优，4 位电价行补点
         return sign + num
 
     def _row_is_mostly_zeros(self, row: List[str]) -> bool:
