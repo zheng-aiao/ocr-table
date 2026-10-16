@@ -1966,12 +1966,16 @@ class TableImageExtractor:
         if not t:
             return False
         digits = re.sub(r"[.\-]", "", t)
-        # 已明确多个带点小数：可按文本拆
-        if len(re.findall(r"-?\d{1,4}\.\d{1,3}", t)) >= 2:
+        # 已明确多个「整数≤3 位」的小数：可按文本拆（333.48、187.34）
+        if len(re.findall(r"-?\d{1,3}\.\d{1,3}", t)) >= 2:
             return False
-        # 单格现货多为 ≤6 位；8+ 且至多一个点 ≈ 两格粘连（如 19.396+19.307→193969.307）
-        # 阈值 10 会漏 9 位，DP 猜拆成 193/969.307
-        return len(digits) >= 8 and t.count(".") <= 1
+        # 已带小数点且整数部分 ≥4 位：千位以上，按粘连风险处理
+        if "." in t:
+            int_digits = re.sub(r"\D", "", t.split(".", 1)[0])
+            if len(int_digits) >= 4:
+                return True
+        # 总位数 ≥7 且至多一个点：两格粘连（如 333.48+187.34→33348187.34）
+        return len(digits) >= 7 and t.count(".") <= 1
 
     def _columns_covered_by_cell(
         self,
@@ -4202,7 +4206,7 @@ class TableImageExtractor:
                     for j, c in enumerate(base)
                     if j != col
                 ]
-                dotted_f = [v for v in dotted if v is not None and v < 80.0]
+                dotted_f = [v for v in dotted if v is not None and v < 1000.0]
                 if dotted_f:
                     anchors.append(float(np.median(dotted_f)))
             if not anchors:
@@ -4244,9 +4248,8 @@ class TableImageExtractor:
                 pv = abs(float(s))
             except ValueError:
                 return False
-        if small_med > 0 and pv > max(small_med * 10.0, 200.0):
-            return True
-        return pv >= 500.0
+        # 电价整数最多 3 位；预览到千位（≥1000）才是粘连残骸
+        return pv >= 1000.0
 
     def _ocr_single_cell(self, img: np.ndarray,
                          x0: int, y0: int, x1: int, y1: int,
@@ -4810,7 +4813,7 @@ class TableImageExtractor:
             if fv is None:
                 continue
             dotted_all.append(fv)
-            if fv < 80.0:
+            if fv < 1000.0:
                 dotted_small.append(fv)
         if len(dotted_all) >= 1:
             anchors.append(float(np.median(dotted_all)))
@@ -5016,13 +5019,14 @@ class TableImageExtractor:
                 fv = abs(float(raw))
             except ValueError:
                 continue
-            if fv >= 80.0:
+            # 整数 1～3 位（<1000）都是正常电价；333.48 不得被排除在参照之外
+            if fv >= 1000.0:
                 continue
             small.append(fv)
             body = raw.lstrip("-").split(".", 1)[0]
             int_lens.append(len(re.sub(r"\D", "", body)))
         if not small:
-            return [], 0.0, 2.0
+            return [], 0.0, 3.0
         return (
             small,
             float(np.median(small)),
@@ -5036,60 +5040,37 @@ class TableImageExtractor:
         small_med: float,
         med_int: float,
     ) -> bool:
-        """电价行可疑格：漏点 4 位、无点残段、或整数部过长疑似吃了邻列。"""
+        """电价行可疑格：整数≥4 位或总位数≥7 才重识。1～3 位整数的已识别结果保留。"""
+        del small_med, med_int
         raw = str(row[idx] or "").strip().replace("−", "-").replace("–", "-")
         if not raw or raw == "-":
             return False
-        # 电价行无点整数：
+        body = raw[1:] if raw.startswith("-") and len(raw) > 1 else raw
+        digits = re.sub(r"\D", "", body)
+        # 已有小数点：187.34、333.48 这种整数 1～3 位直接保留。
+        # 整数部分 ≥4 位，或连小数一共 ≥7 位，才是粘连风险，按列重识。
+        if "." in body:
+            int_digits = re.sub(r"\D", "", body.split(".", 1)[0])
+            if len(int_digits) >= 4 or len(digits) >= 7:
+                return True
+            return False
+        # 无点整数：
+        # - ≥7 位：粘连，列重识
+        # - 5/6 位：交给行级补点，不在这里清空
         # - 4 位：预览像电价则交给 xx.xx / x.xxx 选优，否则重识
-        # - 5/6 位：交给行级补点（19396→19.396），禁止按 float 量级误判重识
-        # - 1 位：不重识；2～3 位离群，或电价行里的无点整数，走竖纹重识
-        if "." not in raw:
-            if not re.fullmatch(r"-?\d{1,6}", raw):
-                return False
-            if raw in ("0", "-0"):
-                return False
-            digits = re.sub(r"\D", "", raw.lstrip("-"))
-            if len(digits) >= 5:
-                return False
-            if len(digits) == 4:
-                # 预览落在电价量级 → 交给行级 xx.xx / x.xxx 选优；勿重识失败再误清空
-                pv = self._preview_sticky_price(raw)
-                if pv is not None and 0.5 <= pv <= 200.0:
-                    return False
-                return True
-            try:
-                fv = abs(float(raw))
-            except ValueError:
-                return False
-            if len(digits) >= 3 and small_med > 0 and fv > small_med * 3:
-                return True
-            if med_int <= 2 and len(digits) >= 3 and fv >= 10:
-                return True
-            # 电价行里的 2～3 位无点整数：拍屏竖纹常把 62.4 读成 67、15.2 读成 152。
-            # 量级未必离群，交给竖纹抑制后的单格重识，对不上邻格就不改。
-            if len(digits) in (2, 3) and self._row_looks_like_price(row):
-                return True
+        # - 1～3 位：正常整数部分（可以是 333），不因「通常只有两位」而重识
+        if not re.fullmatch(r"-?\d+", raw):
             return False
-        try:
-            fv = abs(float(raw))
-        except ValueError:
+        if raw in ("0", "-0"):
             return False
-        body = raw.lstrip("-")
-        int_part, _, frac = body.partition(".")
-        int_digits = re.sub(r"\D", "", int_part)
-        if len(int_digits) < 3 or fv < 80.0:
+        if len(digits) >= 7:
+            return True
+        if len(digits) >= 5:
             return False
-        # 去掉首位后更接近小电价簇 → 像串位多吃一位（758.378→58.378）
-        if small_med > 0 and len(int_digits) >= 3:
-            try:
-                dropped = float(int_digits[1:] + (("." + frac) if frac else ""))
-            except ValueError:
-                dropped = -1.0
-            if dropped > 0 and abs(dropped - small_med) * 4 < abs(fv - small_med):
-                if fv > small_med * 8:
-                    return True
-        if med_int <= 2 and len(int_digits) >= med_int + 1 and fv > 100:
+        if len(digits) == 4:
+            pv = self._preview_sticky_price(raw)
+            if pv is not None and 0.5 <= pv <= 999.0:
+                return False
             return True
         return False
 
@@ -5182,7 +5163,7 @@ class TableImageExtractor:
             return [p for p in fixed if p]
 
         # 优先拆成多段「短整数.1~3位小数」（电价常见；两点齐全可安全拆）
-        multi_dec = re.findall(r"-?\d{1,4}\.\d{1,3}", t)
+        multi_dec = re.findall(r"-?\d{1,3}\.\d{1,3}", t)
         if len(multi_dec) >= 2:
             digits_only = re.sub(r"[.\-]", "", t)
             covered = "".join(re.sub(r"-", "", p) for p in multi_dec).replace(".", "")
@@ -5196,7 +5177,7 @@ class TableImageExtractor:
         usable_dec = [
             p
             for p in signed_decimals
-            if len(re.sub(r"[^\d]", "", p.split(".", 1)[0])) <= 4
+            if len(re.sub(r"[^\d]", "", p.split(".", 1)[0])) <= 3
         ]
         digits_only = re.sub(r"[.\-]", "", t)
         if usable_dec:
@@ -5206,16 +5187,16 @@ class TableImageExtractor:
 
         leading_neg = t.startswith("-")
         sticky = re.sub(r"[.\-]", "", t)
-        # 8~11 位两格粘连：只试均衡 4~6|4~6（优先 5+5），禁止 3+6→193/969.307
-        if 8 <= len(sticky) <= 11 and t.count(".") <= 1:
-            paired = self._split_sticky_two_cells(sticky)
-            if paired:
-                fixed = _ok_parts(paired)
-                if fixed and self._sticky_pair_plausible(fixed):
-                    if leading_neg and fixed:
-                        fixed[0] = "-" + fixed[0].lstrip("-")
-                    return fixed
-            # 均衡拆失败：拒写，留给几何单列重识（勿再 DP 猜拆）
+        # ≥7 位：粘连风险。8~11 位只试均衡 4~6|4~6，失败或 7 位都不 DP 猜拆
+        if len(sticky) >= 7 and t.count(".") <= 1:
+            if 8 <= len(sticky) <= 11:
+                paired = self._split_sticky_two_cells(sticky)
+                if paired:
+                    fixed = _ok_parts(paired)
+                    if fixed and self._sticky_pair_plausible(fixed):
+                        if leading_neg and fixed:
+                            fixed[0] = "-" + fixed[0].lstrip("-")
+                        return fixed
             return []
 
         if len(sticky) >= 6:
@@ -5265,8 +5246,8 @@ class TableImageExtractor:
                 continue
             assert previews[0] is not None and previews[1] is not None
             a, b = float(previews[0]), float(previews[1])
-            # 现货电价/功率单格不会到数百以上粘连残段
-            if a >= 400.0 or b >= 400.0:
+            # 单格电价整数最多 3 位，预览到千位视为切分失败
+            if a >= 1000.0 or b >= 1000.0:
                 continue
             if a < 0.05 or b < 0.05:
                 continue
@@ -5340,7 +5321,7 @@ class TableImageExtractor:
             pv = self._preview_sticky_price(str(p))
             if pv is None:
                 return False
-            if pv >= 400.0:
+            if pv >= 1000.0:
                 return False
             vals.append(pv)
         # 一段是无点短整数、另一段预览已很大 → 典型误拆
@@ -5465,8 +5446,8 @@ class TableImageExtractor:
         """修正丢失小数点的数字（保留前导负号）。
 
         仅对「位数齐全、整段无点」做单格可判定的格式恢复：
-        - 6 位 → xxx.xxx
-        - 7 位 → 去首/尾后按 6 位试
+        - 6 位 → xxx.xxx（整数部分 3 位）
+        - ≥7 位不删字猜点（粘连风险，交给列重识）
         - 5 位不在此猜点（交给 _repair_five_digit_lost_dots 同行选优）
         - 4 位及以下保持原文（4 位由 _repair_price_row_lost_dots 在 xx.xx / x.xxx 间选优）
         fix_decimal.enabled=false 时只做符号规范化，不猜补点。
@@ -5490,19 +5471,10 @@ class TableImageExtractor:
         # 关闭补点：保留 OCR 无点原文，便于评估引擎认点能力
         if not self.fix_decimal_enabled:
             return sign + num
-        # 6 位：xxx.xxx（281451 → 281.451）
+        # 6 位：xxx.xxx（281451 → 281.451），整数部分仍是 3 位
         if re.fullmatch(r"\d{6}", num):
             return sign + num[:-3] + "." + num[-3:]
-        # 7 位：尝试去首/尾后按 6 位
-        if re.fullmatch(r"\d{7}", num):
-            for cand in (num[1:], num[:-1]):
-                fixed = cand[:3] + "." + cand[3:]
-                try:
-                    fv = float(fixed)
-                except ValueError:
-                    continue
-                if 50 <= fv <= 999:
-                    return sign + fixed
+        # ≥7 位不删字猜点，留给粘连列重识
         # 5 位及以下：单格不猜；5 位行级选优，4 位电价行补点
         return sign + num
 
