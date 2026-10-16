@@ -1,6 +1,0 @@
-layout=dual
-winner=cand_table_fixed
-score=(-989, 1, 110, -0.361)
-source=D:\yw\gx-ocr\ocr-page\data\ocr_runs\dual\20261014_160341_209\left\cand_table_fixed.jpg
-base_date=2026-10-13
-date_source=ocr

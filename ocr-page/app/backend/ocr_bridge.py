@@ -167,8 +167,8 @@ def _default_crop_candidates(
     table_crop: Optional[Tuple[float, float, float, float]] = None,
 ) -> List[Tuple[str, Optional[Tuple[float, float, float, float]]]]:
     """
-    表格 OCR 仅两个候选：先 auto（浅蓝表体+扩边），异常再回退固定比例框。
-    固定框相对当前送入图（双屏=半屏，单屏=整图）。
+    表格 OCR 两个候选：先 auto（浅蓝表体+扩边），再 fixed（配置比例回退）。
+    单/双屏共用此顺序；early_stop 合格则跳过 fixed。
     两路裁完后都进同一套纠偏再 OCR（斜拍时 fixed 同样必须纠偏）。
     """
     mode = "dual" if str(layout).strip().lower() == "dual" else "single"
@@ -753,18 +753,12 @@ def _date_label_search_regions(
     layout: str,
 ) -> List[Tuple[float, float, float, float]]:
     """
-    「日期」搜索带。
-    单屏：固定整图左上四分之一（日期必在此区），再在区内找标签/筛选框。
-    双屏：相对已裁半屏的左上（保持原带，不动现场布局）。
+    「日期」搜索带（单屏/双屏/双摄共用）。
+    固定整图（或一侧整屏）左上四分之一，再在区内找「日期」标签并裁右侧筛选框；
+    多种日期格式解析与裁剪扩边均走既有单屏逻辑，不按 layout 另开搜索带。
     """
-    mode = "dual" if str(layout).strip().lower() == "dual" else "single"
-    if mode == "dual":
-        return [
-            (0.0, 0.06, 0.72, 0.42),
-            (0.0, 0.10, 0.60, 0.48),
-            (0.0, 0.02, 0.80, 0.55),
-        ]
-    # 单屏：屏幕四等分左上；略留边躲开浏览器顶栏/侧栏
+    del layout  # 与单屏同一搜索带，避免双屏超大 ROI 拖慢定位
+    # 屏幕四等分左上；略留边躲开浏览器顶栏/侧栏
     return [
         (0.02, 0.02, 0.50, 0.50),
     ]
@@ -808,16 +802,18 @@ def locate_date_filter_crop(
     *,
     layout: str = "single",
     debug_dir: Optional[Path] = None,
+    log_prefix: str = "",
 ) -> Optional[Dict[str, Any]]:
     """
     自动定位左上角「日期」标签（或日期值文本），返回筛选框相对裁剪。
-    单屏：先在整图左上四分之一内搜索，再裁标签+右侧筛选框。
+    单/双屏共用：先在整图左上四分之一内搜索，再裁标签+右侧筛选框。
     成功时 dict 含 crop / label_box / search / image_path / method。
     """
+    pfx = str(log_prefix or "")
     try:
         full = extractor.read_image_file(str(image_path))
     except Exception:
-        logger.exception("读取原图失败，无法自动定位日期: %s", image_path)
+        logger.exception("%s读取原图失败，无法自动定位日期: %s", pfx, image_path)
         return None
     h, w = full.shape[:2]
     if h < 20 or w < 20:
@@ -832,9 +828,9 @@ def locate_date_filter_crop(
         if band is None or getattr(band, "size", 0) == 0:
             continue
         bh, bw = band.shape[:2]
-        # 放大 + 去摩尔纹变体，提高「日期」小字命中
+        # 与单屏相同：左上 1/4 内放大找「日期」，命中即停
         mapped: List[Tuple[str, Tuple[float, float, float, float]]] = []
-        for use in _locate_band_variants(band, loc_scale=2.5):
+        for use in _locate_band_variants(band):
             result = _collect_ocr_result(ocr, use)
             boxes = _iter_ocr_boxes(result)
             scale_x = bw / max(1, use.shape[1])
@@ -885,17 +881,18 @@ def locate_date_filter_crop(
                     ocr, _date_ocr_variants(crop_bgr)[0]
                 )
                 if _texts_look_like_chart_axis(probe_txt):
-                    logger.info(
-                        "日期定位框疑似曲线轴，跳过 search=%s crop=%s texts=%s",
+                    logger.debug(
+                        "%s日期定位框疑似曲线轴，跳过 search=%s crop=%s texts=%s",
+                        pfx,
                         search,
                         crop,
                         probe_txt[:8],
                     )
                     continue
                 if not _locate_crop_looks_like_filter(probe_txt):
-                    logger.info(
-                        "日期定位框不像筛选框（缺「日期」/仅有顶栏年月日），跳过 "
-                        "method=%s crop=%s texts=%s",
+                    logger.debug(
+                        "%s日期定位框不像筛选框，跳过 method=%s crop=%s texts=%s",
+                        pfx,
                         method,
                         crop,
                         probe_txt[:8],
@@ -921,10 +918,9 @@ def locate_date_filter_crop(
         }
         # 仅真正的「日期」标签立即返回；value 兜底须已通过筛选框校验
         if method == "label":
-            logger.info(
-                "自动定位日期筛选框 layout=%s method=label search=%s crop=%s",
-                layout,
-                search,
+            logger.debug(
+                "%s日期定位 method=label crop=%s",
+                pfx,
                 crop,
             )
             return hit
@@ -932,17 +928,17 @@ def locate_date_filter_crop(
             value_fallback = hit
 
     if value_fallback is not None:
-        logger.info(
-            "自动定位日期筛选框 layout=%s method=value crop=%s",
-            layout,
+        logger.debug(
+            "%s日期定位 method=value crop=%s",
+            pfx,
             value_fallback.get("crop"),
         )
         return value_fallback
 
     logger.warning(
-        "未在上半区找到「日期」标签 image=%s texts=%s",
-        image_path,
-        last_texts[:12],
+        "%s日期定位未找到「日期」标签 texts=%s",
+        pfx,
+        last_texts[:8],
     )
     return None
 
@@ -1059,8 +1055,8 @@ def _date_ocr_variants(bgr: Any) -> List[Any]:
     return out[:5]
 
 
-def _locate_band_variants(band: Any, *, loc_scale: float = 2.5) -> List[Any]:
-    """日期标签搜索带：放大 + 少量去纹变体（定位阶段也要抗摩尔纹）。"""
+def _locate_band_variants(band: Any, *, loc_scale: float = 2.0) -> List[Any]:
+    """日期标签搜索带：先放大，找不到「日期」再上少量去纹变体。"""
     import cv2  # type: ignore
 
     out: List[Any] = []
@@ -1070,8 +1066,8 @@ def _locate_band_variants(band: Any, *, loc_scale: float = 2.5) -> List[Any]:
         )
         out.append(use)
         gray = cv2.cvtColor(use, cv2.COLOR_BGR2GRAY)
-        # 定位只要少量强变体，避免每个搜索带跑太久
-        for g in _demoire_preprocess_gray(gray)[:3]:
+        # 定位优先轻量：双边/锐化各一；NL-means/FFT 留给日期数字增强轮
+        for g in _demoire_preprocess_gray(gray)[:2]:
             if g is None or getattr(g, "size", 0) == 0:
                 continue
             if len(getattr(g, "shape", ())) == 2:
@@ -1081,7 +1077,7 @@ def _locate_band_variants(band: Any, *, loc_scale: float = 2.5) -> List[Any]:
     except Exception:
         logger.exception("日期定位预处理失败")
         out = [band]
-    return out[:4]
+    return out[:3]
 
 
 def _collect_ocr_result(ocr: Any, img: Any) -> Any:
@@ -1121,12 +1117,14 @@ def extract_ui_date_from_image(
     debug_dir: Optional[Path] = None,
     layout: str = "single",
     auto_locate: bool = True,
+    log_prefix: str = "",
 ) -> Dict[str, Any]:
     """
     OCR 半屏/整图左上角「日期」筛选框。
     优先 OCR 找「日期」标签再裁其右侧筛选框；失败才用配置/默认框 + 邻域。
     完整 YYYY/MM/DD 立即采纳；多命中时置信优先。
     """
+    pfx = str(log_prefix or "")
     _ensure_ocr_path(workdir)
     from extract_table import TableImageExtractor  # type: ignore
 
@@ -1179,14 +1177,14 @@ def extract_ui_date_from_image(
                         _save_bgr(run_dir / "date_crop_best.jpg", bgr_best) or ""
                     )
             except Exception:
-                logger.exception("保存日期 best 失败")
-        logger.info(
-            "日期 OCR 成功 date=%s conf=%s reason=%s crop=%s image=%s",
+                logger.exception("%s保存日期 best 失败", pfx)
+        # 成功日志由 extract_points_from_image 统一打「日期识别」阶段行
+        logger.debug(
+            "%s日期 OCR 解析成功 date=%s conf=%s reason=%s",
+            pfx,
             payload["date_str"],
             hit.get("confidence"),
             reason,
-            hit["crop"],
-            image_path,
         )
         return payload
 
@@ -1211,6 +1209,7 @@ def extract_ui_date_from_image(
                 image_path,
                 layout=layout,
                 debug_dir=run_dir,
+                log_prefix=pfx,
             )
             payload["locate"] = (
                 {
@@ -1344,17 +1343,19 @@ def extract_ui_date_from_image(
                     if crop_saved:
                         candidate_image_paths.append(crop_saved)
 
-                    # 首轮即含去摩尔纹变体；增强轮跑满候选
+                    # 首轮轻量变体优先；增强轮再跑满去纹候选
                     all_vars = _date_ocr_variants(bgr)
-                    variants = all_vars if enhance else all_vars[:5]
+                    # 首轮：原图+放大+CLAHE；增强轮才上 NL-means/二值投票
+                    variants = all_vars if enhance else all_vars[:3]
                     attempt_texts: List[str] = []
                     best_local: Optional[Tuple[datetime, int, List[str]]] = None
                     first_result = None
                     crop_hits: List[Dict[str, Any]] = []
                     # 先看原图 OCR：明显是曲线 Y 轴则跳过本框（配置 date_crop 拍屏常偏到图区）
-                    probe = _texts_from_ocr_result(
-                        _collect_ocr_result(ocr, variants[0] if variants else bgr)
+                    first_result = _collect_ocr_result(
+                        ocr, variants[0] if variants else bgr
                     )
+                    probe = _texts_from_ocr_result(first_result)
                     if _texts_look_like_chart_axis(probe):
                         payload["attempts"].append(
                             {
@@ -1374,10 +1375,11 @@ def extract_ui_date_from_image(
                         continue
                     for vi, variant in enumerate(variants):
                         # 日期框已在变体内 3x 放大；勿再套表格大图 scale（易糊掉 09）
-                        use = variant
-                        result = _collect_ocr_result(ocr, use)
-                        if vi == 0 and not enhance:
-                            first_result = result
+                        # variants[0] 已在 probe 中跑过，复用结果避免重复 OCR
+                        if vi == 0:
+                            result = first_result
+                        else:
+                            result = _collect_ocr_result(ocr, variant)
                         texts = _texts_from_ocr_result(result)
                         attempt_texts.extend(texts)
                         all_texts.extend(texts)
@@ -1402,6 +1404,9 @@ def extract_ui_date_from_image(
                                 "texts": texts[:12],
                             }
                         )
+                        # 完整筛选框日期已命中：立即停变体（格式解析已覆盖 -/ / 等）
+                        if not enhance:
+                            break
                     if crop_hits:
                         # 同裁剪多变体：多数票，避免个别二值把 16 读成 10
                         from collections import Counter
@@ -1423,7 +1428,7 @@ def extract_ui_date_from_image(
                             hh, ww = bgr.shape[:2]
                             if ww > 40 and hh > 20:
                                 right_only = bgr[:, int(ww * 0.22) :].copy()
-                                for variant in _date_ocr_variants(right_only)[:5]:
+                                for variant in _date_ocr_variants(right_only)[:3]:
                                     texts = _collect_ocr_texts(ocr, variant)
                                     attempt_texts.extend(texts)
                                     all_texts.extend(texts)
@@ -1459,7 +1464,7 @@ def extract_ui_date_from_image(
                                 )
                                 if ap:
                                     candidate_image_paths.append(ap)
-                            for variant in _date_ocr_variants(anchored)[:5]:
+                            for variant in _date_ocr_variants(anchored)[:3]:
                                 texts = _collect_ocr_texts(ocr, variant)
                                 attempt_texts.extend(texts)
                                 all_texts.extend(texts)
@@ -1592,14 +1597,14 @@ def extract_ui_date_from_image(
             return _accept(hit, reason="merged_texts")
 
         payload["reason"] = "date_not_found"
-        logger.warning(
-            "日期 OCR 未解析到合法日期 image=%s texts=%s",
-            image_path,
+        logger.debug(
+            "%s日期 OCR 未解析到合法日期 texts=%s",
+            pfx,
             all_texts[:12],
         )
         return payload
     except Exception as e:
-        logger.exception("日期 OCR 失败 image=%s", image_path)
+        logger.exception("%s日期 OCR 异常", pfx)
         payload["reason"] = f"date_ocr_error:{e}"
         payload["candidate_image_paths"] = list(candidate_image_paths)
         return payload
@@ -1613,6 +1618,7 @@ def resolve_business_date(
     date_cfg: Optional[Dict[str, Any]] = None,
     min_confidence: float = 0.3,
     debug_dir: Optional[Path] = None,
+    log_prefix: str = "",
 ) -> Tuple[Optional[datetime], str, Dict[str, Any]]:
     """
     业务日只认画面左上角日期 OCR；不再回退接口/本机日。
@@ -1622,6 +1628,7 @@ def resolve_business_date(
     del fallback_date
     from .config import get_ocr_date_cfg
 
+    pfx = str(log_prefix or "")
     cfg = date_cfg if date_cfg is not None else get_ocr_date_cfg()
     if not cfg.get("enabled", True):
         return None, "disabled", {
@@ -1662,6 +1669,7 @@ def resolve_business_date(
         debug_dir=debug_dir,
         layout=str(cfg.get("layout") or "single"),
         auto_locate=bool(cfg.get("auto_locate", True)),
+        log_prefix=pfx,
     )
     if meta.get("ok") and meta.get("date") is not None:
         return meta["date"], "ocr", meta
@@ -2175,18 +2183,21 @@ def extract_points_from_image(
     date_cfg: Optional[Dict[str, Any]] = None,
     table_crop: Optional[Tuple[float, float, float, float]] = None,
     onnx_threads: Optional[int] = None,
+    log_prefix: str = "",
 ) -> OcrResult:
     """
     按 ocr_engine 逻辑做整表识别（第 1 行时刻表头，其余均为数据行）。
-    裁剪候选顺序：table_auto（蓝底定位+扩边）→ table_fixed（配置比例回退）；
+    裁剪候选顺序：table_auto → table_fixed。
     两路均：裁剪 → 纠偏 → OCR；按表头质量 / 实心行 / 填格密度择优，同分优先更紧裁剪。
-    early_stop=True 时：仅当先行候选三行数据格全部填满才跳过后续；否则两边都 OCR 再择优。
+    early_stop=True 时：auto 表头可用且列数≥4 即跳过 fixed
+    （空数据行常见，不再要求填格密度）；否则两边都 OCR 再择优。
     skip_full_when_ok 已废弃（不再跑整图 full），保留参数兼容旧调用。
 
     业务日只认左上角日期 OCR（完整年月日）；识别失败则整次失败并跳过表格 OCR。
     """
     del data_row_index
     del skip_full_when_ok
+    pfx = str(log_prefix or "")
     # crop 旧参：单屏曾把 capture.single.crop 当额外候选；现统一用 table_crop
     if table_crop is None and crop is not None:
         table_crop = crop
@@ -2237,6 +2248,7 @@ def extract_points_from_image(
         from .config import get_ocr_date_cfg
 
         date_cfg = get_ocr_date_cfg(layout=layout_mode)
+    logger.info("%s日期识别 开始", pfx)
     resolved_date, date_source, date_ocr_meta = resolve_business_date(
         image_path=image_path,
         workdir=workdir,
@@ -2244,6 +2256,7 @@ def extract_points_from_image(
         date_cfg=date_cfg,
         min_confidence=min_confidence,
         debug_dir=run_dir,
+        log_prefix=pfx,
     )
     date_ms = int((time.perf_counter() - t0) * 1000)
     date_crop_path = str(date_ocr_meta.get("image_path") or "")
@@ -2261,10 +2274,11 @@ def extract_points_from_image(
 
     if date_source != "ocr" or resolved_date is None:
         logger.warning(
-            "日期 OCR 失败，跳过表格 OCR image=%s source=%s reason=%s",
-            image_path,
+            "%s日期识别 失败 source=%s reason=%s ms=%s — 跳过表格识别",
+            pfx,
             date_source,
             date_ocr_out.get("reason"),
+            date_ms,
         )
         return _empty_date_fail_result(
             image_path=image_path,
@@ -2276,6 +2290,7 @@ def extract_points_from_image(
         )
 
     base_date_str = resolved_date.strftime("%Y-%m-%d")
+    logger.info("%s日期识别 成功 date=%s ms=%s", pfx, base_date_str, date_ms)
 
     crop_candidates: List[Tuple[str, Optional[Tuple[float, float, float, float]]]] = list(
         _default_crop_candidates(layout_mode, table_crop=table_crop)
@@ -2364,33 +2379,21 @@ def extract_points_from_image(
         rows: Optional[List[Any]] = None,
         headers: Optional[List[Any]] = None,
     ) -> bool:
-        # 仅当表头可用且每一数据行每一格都填满（100%）才跳过后续候选（fixed 回退）
-        del dens_floor
+        """
+        先行候选是否够格跳过后续。
+        只要求表头可用 + 列数足够；数据空行（0/漏检）在 auto、fixed 上都很常见，
+        不因空行或密度再跑第二候选。
+        """
+        del dens_floor, rows  # 密度/空行不再挡 early_stop
         if sc[0] < 3:
             return False
-        # 列过少时不 early_stop：贴边误砍后的短满表会锁死，跳过 fixed 回退
-        hdrs = list(headers or [])
-        if len(hdrs) < 8:
+        # 列过少：贴边误砍后的短表头不 early_stop，留给 fixed 回退
+        if len(list(headers or [])) < 4:
             return False
-        row_list = list(rows or [])
-        if len(row_list) < 3:
-            return False
-        for row in row_list:
-            if not row:
-                return False
-            for c in row:
-                if c is None or not str(c).strip():
-                    return False
-        # 电价行仅拦明确漏点（无点 4 位整数）。带点高价（如 313.x）是合法业务值，
-        # 串位/粘连已由纠偏、列中心归格、可疑格重识等处理，不再用 long_int 挡 early_stop。
-        price = row_list[-1]
-        for c in price:
-            s = str(c).strip().replace("−", "-").replace("–", "-")
-            if re.fullmatch(r"-?\d{4}", s):
-                return False
         return True
 
     t_table = time.perf_counter()
+    logger.info("%s表格识别 开始 candidates=%s", pfx, len(unique))
     for i, (label, c) in enumerate(unique):
         skip_reason = ""
         if stop_early:
@@ -2415,15 +2418,12 @@ def extract_points_from_image(
             )
             continue
 
-        logger.info(
-            "OCR 识别 #%s layout=%s scale=%s min_confidence=%s label=%s crop=%s image=%s",
+        logger.debug(
+            "%s表格识别 候选#%s label=%s crop=%s",
+            pfx,
             i,
-            layout_mode,
-            scale,
-            min_confidence,
             label,
             c,
-            image_path,
         )
         cand_saved = ""
         cand_name = _cand_display_name(label)
@@ -2437,7 +2437,9 @@ def extract_points_from_image(
                 if cand_saved:
                     artifacts.append(cand_saved)
             except Exception:
-                logger.exception("保存候选裁剪失败 #%s label=%s crop=%s", i, label, c)
+                logger.exception(
+                    "%s保存候选裁剪失败 #%s label=%s", pfx, i, label
+                )
 
         t_cand = time.perf_counter()
         result = extractor.extract(str(image_path), crop_ratio=c)
@@ -2466,19 +2468,25 @@ def extract_points_from_image(
             "ocr_ms": cand_ms,
         }
         if invalid:
-            logger.warning("OCR 裁剪无有效表 #%s crop=%s ocr_ms=%s", i, c, cand_ms)
+            logger.warning(
+                "%s表格识别 候选#%s %s 无效 ms=%s",
+                pfx,
+                i,
+                label,
+                cand_ms,
+            )
             rec["invalid"] = True
             cand_records.append(rec)
             continue
 
         logger.info(
-            "OCR 候选 #%s score=%s headers=%s ocr_ms=%s head=%s…%s",
+            "%s表格识别 候选#%s %s filled=%s cols=%s ms=%s",
+            pfx,
             i,
-            sc,
+            label,
+            filled_n,
             len(headers),
             cand_ms,
-            (headers[:2] if headers else None),
-            (headers[-2:] if headers else None),
         )
         cand_records.append(rec)
         if sc > best_score:
@@ -2494,11 +2502,10 @@ def extract_points_from_image(
         ):
             stop_early = True
             logger.info(
-                "OCR early_stop #%s label=%s hq=%s cols=%s 数据行全满，跳过后续候选",
+                "%s表格识别 early_stop #%s %s — 跳过后续候选",
+                pfx,
                 i,
                 label,
-                sc[0],
-                len(headers),
             )
 
     table_ms = int((time.perf_counter() - t_table) * 1000)
@@ -2564,11 +2571,10 @@ def extract_points_from_image(
         if clean_h != list(best.headers) or clean_r != [list(r) for r in best.rows]:
             best.headers = clean_h
             best.rows = clean_r
-            logger.info(
-                "OCR 落库表头清洗后 cols=%s headers=%s…%s",
+            logger.debug(
+                "%s表格识别 表头清洗 cols=%s",
+                pfx,
                 len(clean_h),
-                clean_h[:2] if clean_h else None,
-                clean_h[-2:] if clean_h else None,
             )
         filled_rows, gap_filled_n, gap_fill_map = _gap_fill_from_peer_candidates(
             list(best.headers),
@@ -2594,13 +2600,19 @@ def extract_points_from_image(
                 )
                 wrec["gap_filled"] = gap_filled_n
                 wrec["gap_fill_map"] = [list(r) for r in gap_fill_map]
-            logger.info(
-                "OCR 同伴回填 gap_filled=%s winner=%s",
+            logger.debug(
+                "%s表格识别 同伴回填 gap_filled=%s winner=%s",
+                pfx,
                 gap_filled_n,
                 winner_label or best_idx,
             )
 
     if best is None:
+        logger.warning(
+            "%s表格识别 失败 ms=%s — 未得到有效表头/数据行",
+            pfx,
+            table_ms,
+        )
         if run_dir is not None and cand_records:
             try:
                 (run_dir / "candidates.json").write_text(
@@ -2693,6 +2705,14 @@ def extract_points_from_image(
             for cell in row
             if cell and str(cell).strip()
         )
+    logger.info(
+        "%s表格识别 完成 winner=%s filled=%s points=%s ms=%s",
+        pfx,
+        winner_label or f"cand_{best_idx}",
+        ocr_filled,
+        len(points),
+        table_ms,
+    )
     return OcrResult(
         image_path=str(image_path),
         headers=list(best.headers),

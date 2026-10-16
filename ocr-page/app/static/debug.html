@@ -206,6 +206,38 @@
     @media (max-width: 720px) {
       .source-row.show { grid-template-columns: 1fr; }
     }
+
+    .capture-grid {
+      display: none;
+      grid-template-columns: 1fr 1fr;
+      gap: 10px;
+      margin-top: 8px;
+      align-items: start;
+    }
+    .capture-grid.show { display: grid; }
+    .capture-grid .src-col label {
+      display: block;
+      font-size: 0.78rem;
+      color: var(--muted);
+      margin-bottom: 4px;
+    }
+    .capture-grid img {
+      width: 100%;
+      max-height: 220px;
+      object-fit: contain;
+      background: #0b1017;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      display: none;
+      cursor: zoom-in;
+    }
+    .capture-grid img:hover {
+      outline: 1px solid color-mix(in srgb, var(--accent) 55%, var(--line));
+    }
+    @media (max-width: 720px) {
+      .capture-grid.show { grid-template-columns: 1fr; }
+    }
+
     .path { font-size: 0.8rem; color: var(--muted); word-break: break-all; min-height: 1.2em; }
     .msg {
       font-size: 0.85rem;
@@ -356,6 +388,7 @@
     <div class="mode-switch" role="group" aria-label="画面模式">
       <button type="button" id="btnModeSingle" data-mode="single">单屏</button>
       <button type="button" id="btnModeDual" data-mode="dual">双屏</button>
+      <button type="button" id="btnModeDouble" data-mode="double">双摄</button>
     </div>
   </header>
 
@@ -386,6 +419,25 @@
           <div>
             <label>右机组裁剪预览</label>
             <img id="previewR" alt="右机组裁剪" title="点击放大预览" class="pane-preview" style="width:100%;max-height:140px;object-fit:contain;background:#0b1017;border:1px solid var(--line);border-radius:8px;display:none;cursor:zoom-in;" />
+          </div>
+        </div>
+
+        <div id="captureGrid" class="capture-grid">
+          <div class="src-col">
+            <label id="labelSrcL">左 · 原图</label>
+            <img id="previewSrcL" alt="左摄像头原图" title="点击放大预览" />
+          </div>
+          <div class="src-col">
+            <label id="labelSrcR">右 · 原图</label>
+            <img id="previewSrcR" alt="右摄像头原图" title="点击放大预览" />
+          </div>
+          <div class="src-col">
+            <label id="labelMonL">左 · 有效区域</label>
+            <img id="previewMonL" alt="左有效区域" title="点击放大预览" />
+          </div>
+          <div class="src-col">
+            <label id="labelMonR">右 · 有效区域</label>
+            <img id="previewMonR" alt="右有效区域" title="点击放大预览" />
           </div>
         </div>
         <div id="captureMsg" class="msg"></div>
@@ -553,7 +605,7 @@
     };
     let ocrReady = false;
     let currentTag = "";
-    let viewMode = "single"; // single | dual
+    let viewMode = "single"; // single | dual | double
     let screenTags = { left: "", right: "" };
     let screenTitles = { left: "左机组", right: "右机组" };
 
@@ -609,7 +661,7 @@
     if (previewMonitorEl) {
       previewMonitorEl.addEventListener("click", () => openLightbox(previewMonitorEl));
     }
-    ["previewL", "previewR"].forEach((id) => {
+    ["previewL", "previewR", "previewSrcL", "previewSrcR", "previewMonL", "previewMonR"].forEach((id) => {
       const el = document.getElementById(id);
       if (el) el.addEventListener("click", () => openLightbox(el));
     });
@@ -626,7 +678,7 @@
 
     const BTN_IDS = [
       "btnCapture", "btnOcr", "btnOcrPick", "btnOcrDetail", "btnOcrWrite", "btnPiWrite",
-      "btnCurve", "btnTagCfg", "btnTagSave", "btnModeSingle", "btnModeDual",
+      "btnCurve", "btnTagCfg", "btnTagSave", "btnModeSingle", "btnModeDual", "btnModeDouble",
     ];
 
     function pad(n) { return String(n).padStart(2, "0"); }
@@ -807,6 +859,67 @@
       renderOcrListInto("ocrHead", "ocrBody", "ocrWrap", points, headers, rowTags, rows);
     }
 
+
+    function setGridImg(id, urlOrPath, isUrl) {
+      const el = document.getElementById(id);
+      if (!el) return;
+      let url = "";
+      if (urlOrPath) url = isUrl ? String(urlOrPath) : (toPreviewUrl(urlOrPath) || "");
+      if (url) {
+        if (url.indexOf("blob:") === 0) el.src = url;
+        else el.src = url + (url.indexOf("?") >= 0 ? "&" : "?") + "t=" + Date.now();
+        el.style.display = "block";
+      } else {
+        el.style.display = "none";
+        el.removeAttribute("src");
+      }
+    }
+    function clearCaptureGrid() {
+      ["previewSrcL", "previewSrcR", "previewMonL", "previewMonR"].forEach((id) => setGridImg(id, "", true));
+      const g = document.getElementById("captureGrid");
+      if (g) g.classList.remove("show");
+    }
+    function showDualCapturePreview(data, hint) {
+      revokePreviewObjectUrl();
+      const left = (data && data.left) || {};
+      const right = (data && data.right) || {};
+      const leftSrc = data.left_image || left.image_path || left.source_path || "";
+      const rightSrc = data.right_image || right.image_path || right.source_path || "";
+      const leftMon = left.monitor_path || left.work_image_path
+        || (left.monitor && left.monitor.monitor_image) || "";
+      const rightMon = right.monitor_path || right.work_image_path
+        || (right.monitor && right.monitor.monitor_image) || "";
+      latestLeftPath = leftSrc || "";
+      latestRightPath = rightSrc || "";
+      latestImagePath = leftSrc || rightSrc || latestImagePath || "";
+      const lTag = left.tag || screenTags.left || "L";
+      const rTag = right.tag || screenTags.right || "R";
+      const lType = left.type || "";
+      const rType = right.type || "";
+      const lab = (side, kind, type, tag) =>
+        side + " · " + kind + (type ? " · " + type : "") + (tag ? " · " + tag : "");
+      const elLab = (id, t) => { const e = document.getElementById(id); if (e) e.textContent = t; };
+      elLab("labelSrcL", lab("左", "原图", lType, lTag));
+      elLab("labelSrcR", lab("右", "原图", rType, rTag));
+      elLab("labelMonL", lab("左", "有效区域", lType, lTag));
+      elLab("labelMonR", lab("右", "有效区域", rType, rTag));
+      setGridImg("previewSrcL", leftSrc, false);
+      setGridImg("previewSrcR", rightSrc, false);
+      setGridImg("previewMonL", leftMon || leftSrc, false);
+      setGridImg("previewMonR", rightMon || rightSrc, false);
+      const g = document.getElementById("captureGrid");
+      if (g) g.classList.add("show");
+      if (hint != null) imagePathHint.textContent = hint;
+      else {
+        const parts = [];
+        if (leftSrc) parts.push("左原图 " + leftSrc);
+        if (rightSrc) parts.push("右原图 " + rightSrc);
+        imagePathHint.textContent = parts.length ? parts.join("　|　") : "当前图片：无";
+      }
+    }
+    let latestLeftPath = "";
+    let latestRightPath = "";
+
     function showSidePreview(side, imagePath) {
       const el = document.getElementById(side === "left" ? "previewL" : "previewR");
       const url = imagePath ? toPreviewUrl(imagePath) : null;
@@ -977,7 +1090,7 @@
     function syncCurveLayout() {
       const singleEl = document.getElementById("curveSingle");
       const dualEl = document.getElementById("curveDual");
-      if (viewMode === "dual") {
+      if (viewMode === "dual" || viewMode === "double") {
         singleEl.style.display = "none";
         dualEl.style.display = "grid";
         document.getElementById("curveTitleL").textContent =
@@ -1020,7 +1133,7 @@
     }
 
     function refreshTagChip() {
-      if (viewMode === "dual") {
+      if (viewMode === "dual" || viewMode === "double") {
         const L = screenTags.left || "L";
         const R = screenTags.right || "R";
         tagChip.textContent = `左 ${L}_* · 右 ${R}_*`;
@@ -1033,15 +1146,18 @@
     }
 
     function applyViewMode(mode, dual) {
-      viewMode = mode === "dual" ? "dual" : "single";
+      const m = String(mode || "single").toLowerCase();
+      viewMode = (m === "dual" || m === "double" || m === "double_camera") ? (m === "dual" ? "dual" : "double") : "single";
       const badge = document.getElementById("modeBadge");
-      badge.textContent = viewMode === "dual" ? "双屏·两机组" : "单屏";
+      badge.textContent = viewMode === "double" ? "双摄·两相机" : (viewMode === "dual" ? "双屏·两机组" : "单屏");
       document.getElementById("btnModeSingle").classList.toggle("active", viewMode === "single");
       document.getElementById("btnModeDual").classList.toggle("active", viewMode === "dual");
+      const btnDbl = document.getElementById("btnModeDouble");
+      if (btnDbl) btnDbl.classList.toggle("active", viewMode === "double");
       document.getElementById("ocrWrap").style.display = "none";
       if (dual) {
-        screenTags.left = (dual.left && dual.left.tag) || "";
-        screenTags.right = (dual.right && dual.right.tag) || "";
+        screenTags.left = (dual.left && dual.left.tag) || screenTags.left || "";
+        screenTags.right = (dual.right && dual.right.tag) || screenTags.right || "";
         screenTitles.left = (dual.left && dual.left.title) || "左机组";
         screenTitles.right = (dual.right && dual.right.title) || "右机组";
         document.getElementById("ocrTitleL").textContent =
@@ -1050,7 +1166,24 @@
           `${screenTitles.right}（${screenTags.right || "R"}_1…N）`;
       }
       const previewLabel = document.getElementById("previewLabel");
-      if (viewMode === "dual") {
+      const sourceRow = document.getElementById("sourceRow");
+      const dualPrev = document.getElementById("dualPreview");
+      const capGrid = document.getElementById("captureGrid");
+      if (viewMode === "double") {
+        if (sourceRow) sourceRow.classList.remove("show");
+        if (dualPrev) dualPrev.style.display = "none";
+        document.getElementById("captureHint").textContent =
+          "并行抓取左右两路摄像头；上排原图，下排有效区域（下一步识别用）。";
+        document.getElementById("ocrHint").innerHTML =
+          "双摄：左右相机各自 OCR。先识别左上角<strong>日期筛选框</strong>，再识别表格；测点前缀见 cameras.*.tag。";
+        document.getElementById("tagModalSingle").style.display = "none";
+        document.getElementById("tagModalDual").style.display = "block";
+        document.getElementById("btnTagSave").style.display = "none";
+        document.getElementById("tagModalTitle").textContent = "双摄测点前缀（只读）";
+        document.getElementById("tagModalHint").textContent =
+          "请在 config.yaml 的 cameras.left.tag / cameras.right.tag 修改。";
+      } else if (viewMode === "dual") {
+        if (capGrid) capGrid.classList.remove("show");
         document.getElementById("captureHint").textContent =
           "抓取「左右两个标签页」同屏画面；下方先显示原图，OCR 后再按 capture.dual 裁成左右半屏预览。";
         document.getElementById("ocrHint").innerHTML =
@@ -1063,6 +1196,8 @@
           "请在 config.yaml 的 capture.dual.left.tag / right.tag 修改。";
         if (previewLabel) previewLabel.textContent = "原图（双屏整图）";
       } else {
+        if (capGrid) capGrid.classList.remove("show");
+        if (dualPrev) dualPrev.style.display = "none";
         document.getElementById("captureHint").textContent = "从摄像机抓取最新画面并预览。";
         document.getElementById("ocrHint").innerHTML =
           "对<strong>抓取图</strong>或<strong>本机任选图片</strong>：先 OCR 左上角日期筛选框，再识别表头时刻与数据行；日期失败则直接失败。";
@@ -1082,7 +1217,8 @@
     let cachedDualCfg = null;
 
     async function switchViewMode(mode) {
-      const next = mode === "dual" ? "dual" : "single";
+      const raw = String(mode || "single").toLowerCase();
+      const next = raw === "dual" ? "dual" : (raw === "double" || raw === "double_camera" ? "double" : "single");
       if (next === viewMode) return;
       setBusy(true);
       try {
@@ -1091,11 +1227,12 @@
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ mode: next }),
         });
-        clearOcrResult(`已切换为${next === "dual" ? "双屏" : "单屏"}，请重新 OCR。`);
+        const label = next === "double" ? "双摄" : (next === "dual" ? "双屏" : "单屏");
+        clearOcrResult(`已切换为${label}，请重新 OCR。`);
         setMsg("ocrWriteMsg", "");
         setMsg("curveMsg", "");
         applyViewMode(next, cachedDualCfg);
-        toast("模式已切换", next === "dual" ? "双屏·两机组" : "单屏", true);
+        toast("模式已切换", next === "double" ? "双摄·两相机" : (next === "dual" ? "双屏·两机组" : "单屏"), true);
       } catch (e) {
         toast("切换失败", e.message, false);
       } finally {
@@ -1105,6 +1242,7 @@
 
     document.getElementById("btnModeSingle").onclick = () => switchViewMode("single");
     document.getElementById("btnModeDual").onclick = () => switchViewMode("dual");
+    document.getElementById("btnModeDouble").onclick = () => switchViewMode("double");
 
     async function loadPiConfig() {
       try {
@@ -1123,7 +1261,13 @@
       try {
         const data = await call("/api/config/view");
         cachedDualCfg = data.dual || data.screens || null;
-        applyViewMode(data.mode, cachedDualCfg);
+        if (data.cameras) {
+          screenTags.left = (data.cameras.left && data.cameras.left.tag) || screenTags.left;
+          screenTags.right = (data.cameras.right && data.cameras.right.tag) || screenTags.right;
+        }
+        const initMode = (data.mode === "double" || data.capture_mode === "double_camera")
+          ? "double" : (data.mode || "single");
+        applyViewMode(initMode, cachedDualCfg);
         document.getElementById("tagInputL").value = screenTags.left || "";
         document.getElementById("tagInputR").value = screenTags.right || "";
       } catch (e) {
@@ -1150,24 +1294,46 @@
         baseDate: right.base_date || rightOcr.base_date || "",
       };
 
-      // 原图预览用落盘 00_source；界面文案优先显示上传原始文件名
-      const sourcePath = data.source_copy || data.image_path || "";
-      const shownName = displayFileLabel(data, sourcePath);
       if (data.upload_name) latestUploadName = data.upload_name;
-      if (sourcePath && toPreviewUrl(sourcePath)) {
-        latestImagePath = sourcePath;
-        const hint = latestUploadName || shownName
-          ? ("当前图片（本机上传）：" + (latestUploadName || shownName)
-            + (sourcePath ? "　·　落盘：" + sourcePath : ""))
-          : ("当前图片：" + sourcePath);
-        showSourcePreview(sourcePath, hint);
-      } else if (shownName) {
-        imagePathHint.textContent = "当前图片（本机上传）：" + shownName;
+      if (viewMode === "double") {
+        const sr = document.getElementById("sourceRow");
+        if (sr) sr.classList.remove("show");
+        const dp = document.getElementById("dualPreview");
+        if (dp) dp.style.display = "none";
+        showDualCapturePreview({
+          left_image: data.left_image || left.source_path || "",
+          right_image: data.right_image || right.source_path || "",
+          left: {
+            image_path: left.source_path || data.left_image || "",
+            monitor_path: (left.monitor && left.monitor.monitor_image) || left.monitor_path || left.image_path || "",
+            work_image_path: left.image_path || "",
+            tag: left.tag, type: left.type, host: left.host,
+          },
+          right: {
+            image_path: right.source_path || data.right_image || "",
+            monitor_path: (right.monitor && right.monitor.monitor_image) || right.monitor_path || right.image_path || "",
+            work_image_path: right.image_path || "",
+            tag: right.tag, type: right.type, host: right.host,
+          },
+        }, latestUploadName ? ("当前图片（本机上传）：" + latestUploadName) : null);
+      } else {
+        clearCaptureGrid();
+        const sourcePath = data.source_copy || data.image_path || "";
+        const shownName = displayFileLabel(data, sourcePath);
+        if (sourcePath && toPreviewUrl(sourcePath)) {
+          latestImagePath = sourcePath;
+          const hint = latestUploadName || shownName
+            ? ("当前图片（本机上传）：" + (latestUploadName || shownName)
+              + (sourcePath ? "　·　落盘：" + sourcePath : ""))
+            : ("当前图片：" + sourcePath);
+          showSourcePreview(sourcePath, hint);
+        } else if (shownName) {
+          imagePathHint.textContent = "当前图片（本机上传）：" + shownName;
+        }
+        showSidePreview("left", left.image_path);
+        showSidePreview("right", right.image_path);
+        showMonitorPreview(data.monitor_image || "");
       }
-
-      showSidePreview("left", left.image_path);
-      showSidePreview("right", right.image_path);
-      showMonitorPreview(data.monitor_image || "");
 
       document.getElementById("ocrWrap").style.display = "none";
       document.getElementById("ocrDualWrap").style.display = "grid";
@@ -1295,10 +1461,28 @@
     }
 
     document.getElementById("btnCapture").onclick = async () => {
-      setMsg("captureMsg", "抓图中…");
+      setMsg("captureMsg", viewMode === "double" ? "双摄抓图中…" : "抓图中…");
       try {
         const data = await call("/api/capture", { method: "POST" });
-        if (data && data.image_path) {
+        if (viewMode === "double") {
+          const hasL = !!(data && (data.left_image || (data.left && data.left.image_path)));
+          const hasR = !!(data && (data.right_image || (data.right && data.right.image_path)));
+          if (hasL || hasR) {
+            // 隐藏单/双屏预览区
+            const sr = document.getElementById("sourceRow");
+            if (sr) sr.classList.remove("show");
+            showDualCapturePreview(data);
+            clearOcrResult("已更新抓图，请重新执行 OCR。");
+            setMsg("ocrWriteMsg", "");
+            const tip = (hasL ? "左OK" : "左失败") + " / " + (hasR ? "右OK" : "右失败");
+            setMsg("captureMsg", "抓图成功 · " + tip, "ok");
+            toast("抓图成功", tip, true);
+          } else {
+            setMsg("captureMsg", "抓图返回异常", "err");
+            toast("抓图失败", "无左右图片", false);
+          }
+        } else if (data && data.image_path) {
+          clearCaptureGrid();
           setImagePath(data.image_path);
           setMsg("captureMsg", "抓图成功", "ok");
           toast("抓图成功", data.image_path, true);
@@ -1313,16 +1497,36 @@
     };
 
     document.getElementById("btnOcr").onclick = async () => {
-      if (!latestImagePath) {
+      if (viewMode === "double") {
+        if (!latestLeftPath && !latestRightPath && !latestImagePath) {
+          setMsg("ocrMsg", "请先抓图，或使用「选择本机图片 OCR」。", "warn");
+          toast("无法 OCR", "还没有当前图片", false);
+          return;
+        }
+      } else if (!latestImagePath) {
         setMsg("ocrMsg", "请先抓图，或使用「选择本机图片 OCR」。", "warn");
         toast("无法 OCR", "还没有当前图片", false);
         return;
       }
-      setMsg("ocrMsg", viewMode === "dual" ? "双屏识别中…" : "识别中…");
+      setMsg("ocrMsg", viewMode === "double" ? "双摄识别中…" : (viewMode === "dual" ? "双屏识别中…" : "识别中…"));
       clearOcrResult();
       setMsg("ocrWriteMsg", "");
       try {
-        if (viewMode === "dual") {
+        if (viewMode === "double") {
+          const body = {};
+          if (latestLeftPath || latestRightPath) {
+            if (latestLeftPath) body.left_image = latestLeftPath;
+            if (latestRightPath) body.right_image = latestRightPath;
+          } else {
+            body.image_path = latestImagePath;
+          }
+          const data = await call("/api/ocr/dual", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(body),
+          });
+          applyDualOcrResult(data);
+        } else if (viewMode === "dual") {
           const data = await call("/api/ocr/dual", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
@@ -1367,12 +1571,12 @@
       const file = ev.target.files && ev.target.files[0];
       ev.target.value = "";
       if (!file) return;
-      setMsg("ocrMsg", viewMode === "dual" ? "上传并双屏识别中…" : "上传并识别中…");
+      setMsg("ocrMsg", viewMode === "double" ? "上传并双摄识别中…" : (viewMode === "dual" ? "上传并双屏识别中…" : "上传并识别中…"));
       clearOcrResult();
       setMsg("ocrWriteMsg", "");
       setMsg("captureMsg", "");
       try {
-        if (viewMode === "dual") {
+        if (viewMode === "dual" || viewMode === "double") {
           const fd = new FormData();
           fd.append("file", file, file.name);
           const data = await call("/api/ocr/dual/upload", { method: "POST", body: fd });
@@ -1417,7 +1621,7 @@
       try {
         // 双屏：绝不传统一 tag，严格按点内 tag（左右前缀已写在点上）+ 各自 timestamp
         // 带上 OCR 落盘的 run_id，写成功后把执行履历从「待写PI」改为成功
-        const body = viewMode === "dual"
+        const body = (viewMode === "dual" || viewMode === "double")
           ? { points: lastOcrPoints }
           : { points: lastOcrPoints, tag: currentTag || null };
         if (lastRunId) body.run_id = lastRunId;
@@ -1430,7 +1634,7 @@
           ? ` · 履历 ${data.run.result_status}`
           : (lastRunId ? ` · 履历 ${lastRunId}` : "");
         if (data.ok) {
-          const tip = viewMode === "dual"
+          const tip = (viewMode === "dual" || viewMode === "double")
             ? `双屏写入成功：${data.written}/${data.total}（按点内左右测点）${runTip}`
             : `写入成功：${data.written}/${data.total}（测点 ${data.tag || currentTag}）${runTip}`;
           setMsg("ocrWriteMsg", tip, "ok");

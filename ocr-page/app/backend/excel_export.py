@@ -38,7 +38,7 @@ def export_ocr_excel(
     cfg = cfg or get_config()
     excel = cfg.get("excel", {}) or {}
     if not excel.get("enabled", False):
-        logger.info("excel.enabled=false，跳过导出")
+        logger.debug("excel.enabled=false，跳过导出")
         return None
 
     try:

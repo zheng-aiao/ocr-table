@@ -81,6 +81,27 @@ def parse_crop(raw: Optional[str]) -> Optional[Tuple[float, float, float, float]
     return parts[0], parts[1], parts[2], parts[3]
 
 
+def get_auto_monitor(cfg: Optional[Dict[str, Any]] = None) -> bool:
+    """
+    是否先裁显示器有效区域再 OCR。
+    只认 capture.auto_monitor；缺省 false（与 config.yaml 一致，不裁则用整图）。
+    兼容旧键：capture.single.auto_monitor / capture.dual.auto_monitor。
+    """
+    cfg = cfg or get_config()
+    cap = cfg.get("capture") or {}
+    if not isinstance(cap, dict):
+        return False
+    if "auto_monitor" in cap:
+        return bool(cap.get("auto_monitor"))
+    single = cap.get("single") or {}
+    if isinstance(single, dict) and "auto_monitor" in single:
+        return bool(single.get("auto_monitor"))
+    dual = cap.get("dual") or {}
+    if isinstance(dual, dict) and "auto_monitor" in dual:
+        return bool(dual.get("auto_monitor"))
+    return False
+
+
 def get_single_cfg(cfg: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """capture.single（兼容旧 capture.tag/crop、ocr.crop、pi.tag）。"""
     cfg = cfg or get_config()
@@ -124,12 +145,14 @@ def save_config(cfg: Optional[Dict[str, Any]] = None, path: Optional[str] = None
 
 
 def update_capture_mode(mode: str) -> Dict[str, Any]:
-    """更新 capture.mode（single|dual），写回 config.yaml 并热更新内存。"""
+    """更新 capture.mode：single | dual | double，写回 config.yaml。"""
     import re
 
     m = str(mode or "").strip().lower()
-    if m not in ("single", "dual"):
-        raise ValueError("mode 须为 single 或 dual")
+    if m in ("double_camera", "cameras"):
+        m = "double"
+    if m not in ("single", "dual", "double"):
+        raise ValueError("mode 须为 single、dual 或 double")
     cfg = get_config()
     cfg.setdefault("capture", {})["mode"] = m
 
@@ -163,7 +186,18 @@ def update_capture_mode(mode: str) -> Dict[str, Any]:
     if replaced:
         DEFAULT_CONFIG_PATH.write_text("".join(out), encoding="utf-8")
     else:
-        save_config(cfg)
+        # capture 下尚无 mode：插到 capture: 下一行
+        out2: list[str] = []
+        inserted = False
+        for line in out:
+            out2.append(line)
+            if (
+                not inserted
+                and re.match(r"^capture:\s*(#.*)?$", line.rstrip("\r\n"))
+            ):
+                out2.append(f"  mode: {m}\n")
+                inserted = True
+        DEFAULT_CONFIG_PATH.write_text("".join(out2), encoding="utf-8")
     return {"ok": True, "mode": m}
 
 
@@ -340,8 +374,7 @@ def get_ocr_min_points(cfg: Optional[Dict[str, Any]] = None) -> int:
 def get_ocr_early_stop(cfg: Optional[Dict[str, Any]] = None) -> bool:
     """
     裁剪竞选是否允许提前结束。
-    true（默认）：仅当先行候选（auto）数据行全部填满（100%）时跳过 fixed；
-    任一行有空格则 auto+fixed 都 OCR 再择优。
+    true（默认）：先行候选表头可用且列数≥4 即跳过后续（不要求数据行填满）。
     false：始终两边都跑。
     """
     cfg = cfg or get_config()
@@ -350,8 +383,7 @@ def get_ocr_early_stop(cfg: Optional[Dict[str, Any]] = None) -> bool:
 
 def get_ocr_early_stop_min_density(cfg: Optional[Dict[str, Any]] = None) -> int:
     """
-    early_stop 密度门槛（百分数）。
-    现以「每行每格填满」为准；本值保留兼容，建议 100。
+    旧 early_stop 密度门槛（百分数），现已不参与判定；保留读取以兼容旧配置。
     """
     cfg = cfg or get_config()
     try:
@@ -635,6 +667,16 @@ def get_ocr_expected_cells(
     return table_expected_cells(headers, rows)
 
 
+def normalize_ocr_artifacts_mode(mode: str = "single") -> str:
+    """OCR 中间产物顶层目录名：single | dual | double。"""
+    m = str(mode or "single").strip().lower()
+    if m in ("double", "double_camera", "cameras"):
+        return "double"
+    if m == "dual":
+        return "dual"
+    return "single"
+
+
 def new_ocr_run_dir(
     mode: str = "single",
     cfg: Optional[Dict[str, Any]] = None,
@@ -642,12 +684,13 @@ def new_ocr_run_dir(
     """
     新建一次 OCR 会话目录（始终落盘过程中间文件）：
       data/ocr_runs/single/YYYYMMDD_HHMMSS_mmm/
-      data/ocr_runs/dual/YYYYMMDD_HHMMSS_mmm/
+      data/ocr_runs/dual/YYYYMMDD_HHMMSS_mmm/          # 双屏拼缝
+      data/ocr_runs/double/YYYYMMDD_HHMMSS_mmm/        # 双摄；下含 left/ right/
     """
     from datetime import datetime
     import uuid
 
-    m = "dual" if str(mode).strip().lower() == "dual" else "single"
+    m = normalize_ocr_artifacts_mode(mode)
     root = resolve_ocr_artifacts_root(cfg)
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")[:-3]
     out = root / m / stamp

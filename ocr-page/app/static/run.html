@@ -92,15 +92,19 @@
     .imgs.hero {
       grid-template-columns: 1fr 1fr;
     }
+    .imgs.hero.hero-2x2 {
+      grid-template-columns: 1fr 1fr;
+    }
     .imgs.hero:has(> :only-child) {
       grid-template-columns: 1fr;
     }
     .imgs.hero img,
     .img-card.hero img {
-      max-height: 420px;
+      max-height: 360px;
     }
     @media (max-width: 860px) {
-      .imgs.hero { grid-template-columns: 1fr; }
+      .imgs.hero,
+      .imgs.hero.hero-2x2 { grid-template-columns: 1fr; }
     }
     .img-card {
       background: #0b1116;
@@ -1329,7 +1333,7 @@
           <p class="side-title">${name}${titleExtra} ${st}
             <span class="muted">采纳/识别 ${side.point_count ?? 0}/${side.ocr_filled ?? '-'}</span>
           </p>
-          <div class="imgs hero">${imgCard(side.image_url, `${name}切分图`)}</div>
+          <div class="imgs hero">${imgCard(side.image_url || side.monitor_url, `${name}有效区域（识别用）`)}</div>
           <div class="links" style="margin-top:10px;">
             ${copyPathBtn(side.image_path, '复制切分图路径')}
           </div>
@@ -1391,21 +1395,50 @@
               if (!name) return '';
               return `<div class="sub" style="margin:0 0 10px;color:var(--muted);word-break:break-all;">上传文件：<strong style="color:var(--text)">${name.replace(/</g,'&lt;')}</strong></div>`;
             })()}
-            <div class="imgs hero">
-              ${imgCard(run.source_url || run.capture_url, '源图（整帧）')}
-              ${(() => {
-                const monUrl = resolveMonitorUrl(run);
-                return monUrl ? imgCard(monUrl, '识别电脑区域（00_monitor）') : '';
-              })()}
-            </div>
-            <div class="links" style="margin-top:10px;">
-              ${copyPathBtn(run.source_path || run.capture_path, '复制源图路径')}
-              ${(() => {
-                const mp = resolveMonitorPath(run);
-                return mp ? copyPathBtn(mp, '复制屏内图路径') : '';
-              })()}
-              ${run.excel_url ? `<a href="${run.excel_url}" target="_blank">下载 Excel</a>` : ''}
-            </div>
+            ${(() => {
+              const left = run.left || {};
+              const right = run.right || {};
+              const leftSrc = run.left_capture_url || left.source_url || '';
+              const rightSrc = run.right_capture_url || right.source_url || '';
+              const leftMon = left.monitor_url || left.image_url || '';
+              const rightMon = right.monitor_url || right.image_url || '';
+              // 仅双摄履历用 2×2；普通 dual 仍用整帧源图+屏内图
+              const isDouble = run.capture_mode === 'double_camera'
+                || run.mode === 'double'
+                || !!(run.left_capture_url || run.right_capture_url);
+              if (isDouble && (leftSrc || rightSrc || leftMon || rightMon)) {
+                const lTag = left.tag || 'L';
+                const rTag = right.tag || 'R';
+                const cell = (url, cap) => imgCard(url, cap) || `<div class="img-card"><div class="cap">${cap}（无）</div></div>`;
+                return `<div class="imgs hero hero-2x2">
+                  ${cell(leftSrc, `左 · 原图（${lTag}）`)}
+                  ${cell(rightSrc, `右 · 原图（${rTag}）`)}
+                  ${cell(leftMon, '左 · 有效区域')}
+                  ${cell(rightMon, '右 · 有效区域')}
+                </div>
+                <div class="links" style="margin-top:10px;">
+                  ${copyPathBtn(run.left_capture_path || left.source_path, '复制左原图路径')}
+                  ${copyPathBtn(run.right_capture_path || right.source_path, '复制右原图路径')}
+                  ${copyPathBtn(left.monitor_path || left.image_path, '复制左有效区域路径')}
+                  ${copyPathBtn(right.monitor_path || right.image_path, '复制右有效区域路径')}
+                  ${run.excel_url ? `<a href="${run.excel_url}" target="_blank">下载 Excel</a>` : ''}
+                </div>`;
+              }
+              // 单图兼容
+              const monUrl = resolveMonitorUrl(run);
+              return `<div class="imgs hero">
+                ${imgCard(run.source_url || run.capture_url, '源图（整帧）')}
+                ${monUrl ? imgCard(monUrl, '识别电脑区域（00_monitor）') : ''}
+              </div>
+              <div class="links" style="margin-top:10px;">
+                ${copyPathBtn(run.source_path || run.capture_path, '复制源图路径')}
+                ${(() => {
+                  const mp = resolveMonitorPath(run);
+                  return mp ? copyPathBtn(mp, '复制屏内图路径') : '';
+                })()}
+                ${run.excel_url ? `<a href="${run.excel_url}" target="_blank">下载 Excel</a>` : ''}
+              </div>`;
+            })()}
           </section>
         `;
 

@@ -14,6 +14,7 @@ from .config import (
     ROOT_DIR,
     get_config,
     get_ocr_expected_cells,
+    normalize_ocr_artifacts_mode,
     resolve_ocr_artifacts_root,
     resolve_project_path,
 )
@@ -40,8 +41,21 @@ def _now_stamp() -> str:
     return datetime.now().strftime("%Y%m%d_%H%M%S_%f")[:-3]
 
 
+def _artifacts_bucket_from_dir(artifacts_dir: Optional[str | Path]) -> Optional[str]:
+    """从 ocr_runs/<bucket>/<stamp> 解析 bucket（single|dual|double）。"""
+    if not artifacts_dir:
+        return None
+    try:
+        parent = Path(artifacts_dir).resolve().parent.name.lower()
+    except Exception:
+        parent = Path(str(artifacts_dir)).parent.name.lower()
+    if parent in ("single", "dual", "double"):
+        return parent
+    return None
+
+
 def _run_id(mode: str, artifacts_dir: Optional[str] = None) -> str:
-    m = "dual" if str(mode).strip().lower() == "dual" else "single"
+    m = _artifacts_bucket_from_dir(artifacts_dir) or normalize_ocr_artifacts_mode(mode)
     if artifacts_dir:
         name = Path(artifacts_dir).name
         if name:
@@ -716,11 +730,30 @@ def _side_summary(side: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
         base_date=side.get("base_date") or ocr.get("base_date"),
         date_source=side.get("date_source") or ocr.get("date_source"),
     )
+    mon = side.get("monitor") if isinstance(side.get("monitor"), dict) else {}
+    source_path = str(side.get("source_path") or "").strip()
+    monitor_path = str(
+        mon.get("monitor_image")
+        or side.get("monitor_path")
+        or ""
+    ).strip()
+    # 有效区域图：优先 monitor；否则用侧图（未裁时即原图副本）
+    work_path = str(side.get("image_path") or "").strip()
+    if not monitor_path and work_path:
+        # 常见落盘：artifacts/<side>/00_monitor.jpg
+        cand = Path(arts) / "00_monitor.jpg" if arts else None
+        if cand is not None and cand.is_file():
+            monitor_path = str(cand)
+        else:
+            monitor_path = work_path
+
     return {
         "ok": bool(side.get("ok")),
         "id": side.get("id"),
         "title": side.get("title"),
         "tag": side.get("tag"),
+        "host": side.get("host"),
+        "type": side.get("type"),
         **date_fields,
         "point_count": point_count,
         "ocr_filled": ocr_filled,
@@ -730,8 +763,12 @@ def _side_summary(side: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
         "reason": side.get("reason"),
         "message": side.get("message"),
         "quality": side.get("quality"),
-        "image_path": side.get("image_path") or "",
-        "image_url": _web_url(side.get("image_path")),
+        "source_path": source_path,
+        "source_url": _web_url(source_path),
+        "image_path": work_path,
+        "image_url": _web_url(work_path),
+        "monitor_path": monitor_path,
+        "monitor_url": _web_url(monitor_path),
         "artifacts_dir": arts,
         "artifacts_url": _web_url(arts),
         "best_table_path": best,
@@ -766,6 +803,10 @@ def build_run_record(
     image_path = (
         capture.get("image_path")
         or result.get("image_path")
+        or capture.get("left_image")
+        or result.get("left_image")
+        or capture.get("right_image")
+        or result.get("right_image")
         or ""
     )
     source_copy = result.get("source_copy") or ""
@@ -797,9 +838,14 @@ def build_run_record(
         if not display_name:
             display_name = Path(str(source_copy or image_path or "")).name or ""
 
+    # 履历 mode：dual/double 都按双路 UI；落盘目录由 artifacts_dir 区分
+    bucket = _artifacts_bucket_from_dir(artifacts_dir) or normalize_ocr_artifacts_mode(
+        mode
+    )
+    record_mode = "dual" if bucket in ("dual", "double") else "single"
     record: Dict[str, Any] = {
         "id": run_id,
-        "mode": "dual" if mode == "dual" else "single",
+        "mode": record_mode,
         "trigger": trigger,
         "started_at": started_at or finished,
         "finished_at": finished,
@@ -859,6 +905,15 @@ def build_run_record(
         record["right_ok"] = bool(result.get("right_ok", right and right.get("ok")))
         record["left"] = left
         record["right"] = right
+        record["capture_mode"] = result.get("capture_mode") or "double_camera"
+        record["left_capture_path"] = (
+            capture.get("left_image") or result.get("left_image") or ""
+        )
+        record["right_capture_path"] = (
+            capture.get("right_image") or result.get("right_image") or ""
+        )
+        record["left_capture_url"] = _web_url(record["left_capture_path"])
+        record["right_capture_url"] = _web_url(record["right_capture_path"])
         # 列表缩略用点数汇总
         record["point_count_left"] = int((left or {}).get("point_count") or 0)
         record["point_count_right"] = int((right or {}).get("point_count") or 0)
@@ -1370,13 +1425,22 @@ def get_run(run_id: str) -> Optional[Dict[str, Any]]:
     data: Optional[Dict[str, Any]] = None
     if not path.is_file():
         # 兼容：从 ocr_runs 里找 run.json
+        # id 形如 single_/dual_/double_ + YYYYMMDD_HHMMSS_mmm
         root = resolve_ocr_artifacts_root()
-        for mode in ("single", "dual"):
-            # id 形如 dual_20260916_185634_404
-            stamp = run_id
+        stamp = run_id
+        buckets: Tuple[str, ...] = ("single", "dual", "double")
+        for mode in buckets:
             prefix = f"{mode}_"
             if run_id.startswith(prefix):
                 stamp = run_id[len(prefix) :]
+                buckets = (mode,)
+                # 旧双摄曾落在 dual/；新双摄在 double/
+                if mode == "dual":
+                    buckets = ("dual", "double")
+                elif mode == "double":
+                    buckets = ("double", "dual")
+                break
+        for mode in buckets:
             cand = root / mode / stamp / "run.json"
             if cand.is_file():
                 try:

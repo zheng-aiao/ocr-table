@@ -16,7 +16,6 @@ from datetime import datetime, timedelta
 from typing import Any, Dict, Optional
 
 from .config import get_config, get_schedule_cfg, load_config
-from .pipeline import run_pipeline
 from .pipeline_dual import get_capture_mode, run_pipeline_dual
 
 logger = logging.getLogger(__name__)
@@ -101,14 +100,15 @@ def _execute_pipeline() -> Dict[str, Any]:
                 "stages": stages,
             }
 
-        if mode == "dual":
+        # 定时：按 capture.mode；double/dual 走双摄/双屏流水线，single 走单屏
+        if mode in ("double", "dual"):
             result = run_pipeline_dual(
                 trigger="schedule", do_ocr=do_ocr, do_pi=do_pi
             )
         else:
-            result = run_pipeline(
-                trigger="schedule", do_ocr=do_ocr, do_pi=do_pi
-            )
+            from .pipeline import run_pipeline
+
+            result = run_pipeline(trigger="schedule")
         result = dict(result)
         result.setdefault("stages", stages)
         ok = bool(result.get("ok"))

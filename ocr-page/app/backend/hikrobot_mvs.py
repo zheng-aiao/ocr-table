@@ -181,12 +181,17 @@ class HikrobotMvsClient:
         capture_dir: str = "data/captures",
         net_export: str = "",
         jpeg_quality: int = 80,
+        *,
+        name_label: str = "",
+        side: str = "",
     ):
         self.host = host.strip()
         self.timeout_sec = float(timeout_sec)
         self.capture_dir = Path(capture_dir)
         self.net_export = (net_export or "").strip()
         self.jpeg_quality = max(50, min(99, int(jpeg_quality)))
+        self.name_label = str(name_label or side or "").strip()
+        self.side = str(side or "").strip()
 
     @property
     def picture_url(self) -> str:
@@ -219,7 +224,7 @@ class HikrobotMvsClient:
 
         if int(device_list.nDeviceNum) == 0 and not self.net_export:
             raise HikvisionCaptureError(
-                f"未发现 GigE 相机，且未配置 camera.net_export；"
+                f"未发现 GigE 相机，且未配置 cameras.*.net_export；"
                 f"目标 IP={target}。请先用 MVS 客户端确认相机在线。"
             )
 
@@ -241,7 +246,7 @@ class HikrobotMvsClient:
                 return info
             raise HikvisionCaptureError(
                 f"未找到 IP={target} 的相机（在线 {device_list.nDeviceNum} 台）。"
-                f"可在 config.yaml 设置 camera.net_export 为本机网卡 IP 后按 IP 直连。"
+                f"可在 config.yaml 设置 cameras.*.net_export 为本机网卡 IP 后按 IP 直连。"
             )
 
         st_dev = C["MV_CC_DEVICE_INFO"]()
@@ -363,12 +368,15 @@ class HikrobotMvsClient:
 
             now = datetime.now()
             out_dir = self.capture_dir / now.strftime("%Y%m%d")
-            out_path = _unique_time_path(out_dir, now)
+            out_path = _unique_time_path(out_dir, now, label=self.name_label)
             self._save_jpeg(cam, frame, out_path)
 
             size = out_path.stat().st_size if out_path.is_file() else 0
+            from .camera_common import cam_log_prefix
+
             logger.info(
-                "MVS 抓图成功 %s (%d bytes) <- gige://%s",
+                "%s抓图完成 path=%s bytes=%d type=mvs host=%s",
+                cam_log_prefix(self.side or self.name_label),
                 out_path,
                 size,
                 self.host,

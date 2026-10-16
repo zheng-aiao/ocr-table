@@ -1,28 +1,27 @@
 # -*- coding: utf-8 -*-
-"""双屏左右流水线：一帧抓图 → 裁显示器 → 左右裁剪 → 各自 OCR / Excel / 写 PI。
+"""双摄像头流水线（double-camera）：两路并行抓拍 → 处理 → 写 PI。
 
-与 pipeline.run_pipeline（单屏）隔离，不修改其行为。
-
-要点：
-- 先 auto_monitor 收紧屏外环境（远景四周 / 近景上下留白），失败回退整图
-- 再在屏内图上 auto_seam 左右分缝
-- 左/右是两个机组，各自测点前缀 capture.dual.*.tag，行 → 前缀_1…_N
-- 左右独立解析，点内已带 tag，写 PI 不互相覆盖
-- 业务日只认各半屏左上角日期 OCR；失败则该侧直接失败并跳过表格 OCR
+- cameras.left / cameras.right：各自 type（mvs|isapi）、连接参数、写 PI 的 tag 前缀
+- capture.dual.left / right：仅 table_crop / date_crop（OCR 回退框）
+- 无 capture.mode；抓拍后统一：有效区域 → 纠偏 → 日期 → 表格识别
 """
 
 from __future__ import annotations
 
 import logging
+import shutil
 import time
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
+
+from .camera_common import cam_log_prefix
 from .config import (
     ROOT_DIR,
     get_config,
+    get_auto_monitor,
     get_ocr_date_cfg,
     get_ocr_early_stop,
     get_ocr_early_stop_min_density,
@@ -35,105 +34,147 @@ from .config import (
     get_ocr_table_crop,
     get_ocr_onnx_threads,
     new_ocr_run_dir,
-    parse_crop,
     resolve_ocr_workdir,
 )
 from .excel_export import export_ocr_excel
-from .dual_seam import detect_dual_seam, seam_to_side_crops
-from .hikvision import build_camera_client
+from .hikvision import (
+    HikvisionCaptureError,
+    build_camera_client_for_side,
+)
 from .monitor_crop import prepare_monitor_work_image
 from .ocr_bridge import extract_points_from_image, ocr_result_to_dict
 from .pipeline import _elapsed_ms, evaluate_ocr_point_count, write_points_to_pi
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_DUAL: Dict[str, Dict[str, Any]] = {
+DEFAULT_CAMERA: Dict[str, Dict[str, Any]] = {
+    "left": {"type": "mvs", "host": "", "tag": "GX.DEMO.OCR.L"},
+    "right": {"type": "isapi", "host": "", "tag": "GX.DEMO.OCR.R"},
+}
+
+DEFAULT_DUAL_CROP: Dict[str, Dict[str, Any]] = {
     "left": {
-        "id": "61",
-        "title": "left",
-        # 中缝内收，避免右缘吃到右屏表头/数据
-        "crop": "0,0,0.545,1",
         "table_crop": "0.02,0.52,0.97,0.90",
-        "tag": "GX.DEMO.OCR.L",
         "date_crop": "0.0,0.16,0.48,0.26",
     },
     "right": {
-        "id": "62",
-        "title": "right",
-        # 中缝内收，避免左缘吃到左屏
-        "crop": "0.555,0,1,1",
         "table_crop": "0.03,0.52,1.0,0.90",
-        "tag": "GX.DEMO.OCR.R",
         "date_crop": "0.0,0.16,0.48,0.26",
     },
 }
 
 
 def get_capture_mode(cfg: Optional[Dict[str, Any]] = None) -> str:
+    """画面模式：single | dual | double（双摄）。"""
     cfg = cfg or get_config()
-    mode = str((cfg.get("capture") or {}).get("mode") or "single").strip().lower()
-    return "dual" if mode == "dual" else "single"
+    mode = str((cfg.get("capture") or {}).get("mode") or "double").strip().lower()
+    if mode in ("double", "double_camera", "cameras"):
+        return "double"
+    if mode == "dual":
+        return "dual"
+    return "single"
 
 
-def get_dual_defs(cfg: Optional[Dict[str, Any]] = None) -> Dict[str, Dict[str, Any]]:
-    """合并默认与 capture.dual（兼容旧 capture.screens / 顶层 screens）。"""
+def get_camera_defs(cfg: Optional[Dict[str, Any]] = None) -> Dict[str, Dict[str, Any]]:
+    """cameras.left / cameras.right（type、连接、tag）。"""
     cfg = cfg or get_config()
-    cap = cfg.get("capture") or {}
-    raw = cap.get("dual") or cap.get("screens") or cfg.get("screens") or {}
+    raw = cfg.get("cameras") or {}
+    # 兼容旧顶层 camera + capture.dual.*.host/tag
+    legacy_cam = cfg.get("camera") or {}
+    legacy_dual = ((cfg.get("capture") or {}).get("dual") or {})
     out: Dict[str, Dict[str, Any]] = {}
     for side in ("left", "right"):
-        base = dict(DEFAULT_DUAL[side])
+        base = dict(DEFAULT_CAMERA[side])
+        if legacy_cam:
+            for k in (
+                "type",
+                "host",
+                "port",
+                "user",
+                "password",
+                "channel",
+                "timeout_sec",
+                "net_export",
+                "jpeg_quality",
+            ):
+                if legacy_cam.get(k) not in (None, ""):
+                    base[k] = legacy_cam[k]
+        side_legacy = legacy_dual.get(side) or {}
+        for k in ("host", "tag", "type", "port", "user", "password", "channel"):
+            if side_legacy.get(k) not in (None, ""):
+                base[k] = side_legacy[k]
         base.update(raw.get(side) or {})
         out[side] = base
     return out
 
 
-# 兼容旧名
+def get_dual_defs(cfg: Optional[Dict[str, Any]] = None) -> Dict[str, Dict[str, Any]]:
+    """capture.dual：仅 table_crop / date_crop；并附带 cameras 的 tag/host 供展示。"""
+    cfg = cfg or get_config()
+    cap = cfg.get("capture") or {}
+    raw = cap.get("dual") or {}
+    cams = get_camera_defs(cfg)
+    out: Dict[str, Dict[str, Any]] = {}
+    for side in ("left", "right"):
+        crop = dict(DEFAULT_DUAL_CROP[side])
+        side_raw = raw.get(side) or {}
+        if side_raw.get("table_crop") not in (None, ""):
+            crop["table_crop"] = side_raw["table_crop"]
+        if side_raw.get("date_crop") not in (None, ""):
+            crop["date_crop"] = side_raw["date_crop"]
+        cam = cams[side]
+        out[side] = {
+            **crop,
+            "tag": cam.get("tag") or DEFAULT_CAMERA[side]["tag"],
+            "host": cam.get("host") or "",
+            "type": cam.get("type") or "",
+            "id": side,
+            "title": side,
+        }
+    return out
+
+
 def get_screen_defs(cfg: Optional[Dict[str, Any]] = None) -> Dict[str, Dict[str, Any]]:
     return get_dual_defs(cfg)
 
 
-def _parse_day(raw: Optional[str]) -> Optional[datetime]:
-    """yyyy-MM-dd → 当天 00:00:00；空则 None。"""
-    if raw is None:
-        return None
-    s = str(raw).strip()
-    if not s:
-        return None
-    if len(s) == 10:
-        s = s + " 00:00:00"
-    return datetime.strptime(s, "%Y-%m-%d %H:%M:%S")
+def capture_dual_cameras(cfg: Optional[Dict[str, Any]] = None) -> Dict[str, Path]:
+    """并行抓拍左右两路摄像头，返回 {left: Path, right: Path}（可能缺侧）。"""
+    cfg = cfg or get_config()
+    cams = get_camera_defs(cfg)
+    clients = {
+        side: build_camera_client_for_side(cfg, ROOT_DIR, side, cams[side])
+        for side in ("left", "right")
+    }
+    out: Dict[str, Path] = {}
+    errors: Dict[str, str] = {}
 
+    def _one(side: str) -> Tuple[str, Path]:
+        return side, Path(clients[side].capture())
 
-def _crop_to_file(
-    image_path: Path,
-    crop: Tuple[float, float, float, float],
-    out_path: Path,
-) -> Path:
-    """按相对比例裁剪整图并落盘（便于对照调试）。"""
-    try:
-        from PIL import Image
-    except ImportError as e:
-        raise RuntimeError("双屏裁剪需要 Pillow，请 pip install Pillow") from e
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        futs = {pool.submit(_one, side): side for side in ("left", "right")}
+        for fut in as_completed(futs):
+            side = futs[fut]
+            try:
+                s, path = fut.result()
+                out[s] = path
+            except Exception as e:
+                errors[side] = str(e)
+                logger.exception(
+                    "%s抓图失败 type=%s host=%s",
+                    cam_log_prefix(side),
+                    cams[side].get("type"),
+                    cams[side].get("host"),
+                )
 
-    with Image.open(image_path) as im:
-        w, h = im.size
-        x0, y0, x1, y1 = crop
-        box = (
-            max(0, int(x0 * w)),
-            max(0, int(y0 * h)),
-            min(w, int(x1 * w)),
-            min(h, int(y1 * h)),
-        )
-        if box[2] <= box[0] or box[3] <= box[1]:
-            raise ValueError(f"无效 crop 区域: {crop} → {box} (image {w}x{h})")
-        cropped = im.crop(box)
-        out_path.parent.mkdir(parents=True, exist_ok=True)
-        if out_path.suffix.lower() in {".jpg", ".jpeg"}:
-            cropped.convert("RGB").save(out_path, quality=95)
-        else:
-            cropped.save(out_path)
-    return out_path
+    if not out:
+        detail = "; ".join(f"{k}: {v}" for k, v in errors.items()) or "未知错误"
+        raise HikvisionCaptureError(f"双摄抓图全部失败 — {detail}")
+    if errors:
+        for side, err in errors.items():
+            logger.warning("%s抓图失败 %s", cam_log_prefix(side), err)
+    return out
 
 
 def _ocr_one_side(
@@ -149,12 +190,11 @@ def _ocr_one_side(
     fix_decimal: Optional[Dict[str, Any]] = None,
     date_cfg: Optional[Dict[str, Any]] = None,
     table_crop: Optional[Tuple[float, float, float, float]] = None,
+    side: str = "",
 ) -> Dict[str, Any]:
-    """对半屏图做 OCR（layout=dual：半屏窄侧栏候选，不改动上游左右分屏）。
-
-    业务日只认半屏左上角日期 OCR；失败则跳过表格 OCR。
-    """
+    """对一侧整屏图做 OCR（layout=dual，与原先半屏算法同一套）。"""
     del base_date
+    pfx = cam_log_prefix(side)
     try:
         scale = float(ocr_cfg.get("scale", get_ocr_scale()))
     except (TypeError, ValueError):
@@ -188,9 +228,8 @@ def _ocr_one_side(
         max_ocr_width=max_ocr_width,
         date_cfg=date_cfg if date_cfg is not None else get_ocr_date_cfg(layout="dual"),
         table_crop=table_crop,
-        onnx_threads=int(
-            ocr_cfg.get("onnx_threads", get_ocr_onnx_threads())
-        ),
+        onnx_threads=int(ocr_cfg.get("onnx_threads", get_ocr_onnx_threads())),
+        log_prefix=pfx,
     )
     payload = ocr_result_to_dict(result)
     if export_excel and result.ok and result.points:
@@ -204,7 +243,7 @@ def _ocr_one_side(
             if excel_path:
                 payload["excel_path"] = excel_path
         except Exception:
-            logger.exception("双屏 Excel 导出失败 side_image=%s", pane_image)
+            logger.exception("%sExcel 导出失败 image=%s", pfx, pane_image)
     return payload
 
 
@@ -223,187 +262,175 @@ def _points_payload(ocr_dict: Dict[str, Any], side: str) -> List[Dict[str, Any]]
     ]
 
 
-def _resolve_side_dates(
+def _side_camera_failed(
+    side: str,
+    sc: Dict[str, Any],
     *,
-    base_date: Optional[datetime] = None,
-    left_date: Optional[datetime] = None,
-    right_date: Optional[datetime] = None,
-) -> Tuple[Optional[datetime], Optional[datetime]]:
-    """
-    左右各自业务日回退参数已废弃（保留签名兼容）；实际只认画面日期 OCR。
-    """
-    del base_date, left_date, right_date
-    return (None, None)
+    message: str,
+    min_points: int,
+) -> Dict[str, Any]:
+    tag_prefix = str(sc.get("tag") or DEFAULT_CAMERA[side]["tag"]).strip()
+    quality = {
+        "ok": False,
+        "point_count": 0,
+        "min_points": min_points,
+        "reason": "camera_failed",
+        "message": message,
+    }
+    return {
+        "ok": False,
+        "id": side,
+        "title": side,
+        "tag": tag_prefix,
+        "host": str(sc.get("host") or ""),
+        "type": str(sc.get("type") or ""),
+        "base_date": None,
+        "date_source": "failed",
+        "date_ocr": {},
+        "image_path": "",
+        "ocr": {"ok": False, "reason": "camera_failed", "message": message},
+        "points": [],
+        "point_count": 0,
+        "ocr_filled": 0,
+        "quality": quality,
+        "min_points": min_points,
+        "reason": "camera_failed",
+        "message": message,
+        "ocr_ms": 0,
+        "date_ms": 0,
+        "table_ms": 0,
+    }
 
 
-def split_and_ocr(
-    image_path: str,
+def ocr_side_images(
+    left_path: Optional[str],
+    right_path: Optional[str],
     *,
-    base_date: Optional[datetime] = None,
-    left_date: Optional[datetime] = None,
-    right_date: Optional[datetime] = None,
     write_pi: bool = False,
     export_excel: bool = True,
     trigger: str = "manual",
     persist: bool = True,
-    upload_name: Optional[str] = None,
+    capture_errors: Optional[Dict[str, str]] = None,
 ) -> Dict[str, Any]:
     """
-    对已有整图：先裁显示器区域 → 左右裁剪 → 独立 OCR（可选写 PI）。
-    左右日期独立（优先各半屏左上角日期 OCR）；测点前缀独立；结果不混写。
-    过程中间文件写入 ocr.artifacts_dir（默认 data/ocr_runs/dual/<会话>/）。
-    upload_name：本机上传原始文件名（展示用，落盘预览仍用 00_source）。
+    对左右两路已抓到的整屏图分别 OCR（可选写 PI）。
+    无整图分缝；可选各侧 auto_monitor。
     """
-    import shutil
-
     t_all = time.perf_counter()
     cfg = get_config()
     screens = get_dual_defs(cfg)
+    cams = get_camera_defs(cfg)
     ocr_cfg = cfg.get("ocr") or {}
     workdir = resolve_ocr_workdir(cfg)
-    full_path = Path(image_path)
-    if not full_path.is_file():
-        raise FileNotFoundError(f"图片不存在: {image_path}")
-
-    run_dir = new_ocr_run_dir("dual", cfg)
-    work_root = run_dir
-
-    src_copy = ""
-    src_copy_path = run_dir / f"00_source{full_path.suffix.lower() or '.jpg'}"
-    try:
-        shutil.copy2(full_path, src_copy_path)
-        src_copy = str(src_copy_path)
-    except Exception:
-        logger.exception("复制双屏源图失败")
-
-    day_l, day_r = _resolve_side_dates(
-        base_date=base_date, left_date=left_date, right_date=right_date
+    # 双摄 → ocr_runs/double/<时间戳>/{left,right}/；双屏拼缝仍用 dual/
+    capture_mode = get_capture_mode(cfg)
+    run_dir = new_ocr_run_dir(
+        "double" if capture_mode == "double" else "dual", cfg
     )
-    side_days = {"left": day_l, "right": day_r}
+    auto_monitor = get_auto_monitor(cfg)
+    min_points = get_ocr_min_points(cfg)
+    capture_errors = dict(capture_errors or {})
+
+    path_by_side: Dict[str, Optional[Path]] = {
+        "left": Path(left_path) if left_path else None,
+        "right": Path(right_path) if right_path else None,
+    }
+    for side, p in list(path_by_side.items()):
+        if p is not None and not p.is_file():
+            capture_errors.setdefault(side, f"图片不存在: {p}")
+            path_by_side[side] = None
 
     sides: Dict[str, Any] = {}
     all_points: List[Dict[str, Any]] = []
     write_points: List[Dict[str, Any]] = []
-    min_points = get_ocr_min_points(cfg)
     side_ocr_ms: Dict[str, int] = {}
+    monitors: Dict[str, Any] = {}
 
     t_ocr_all = time.perf_counter()
-    dual_cfg = (cfg.get("capture") or {}).get("dual") or {}
-
-    # —— 0) 先裁显示器区域（相对整图），再在屏内做左右分缝 ——
-    # 远景四周有环境 / 近景宽贴满但上下仍有墙桌时，避免日期表区比例错位。
-    auto_monitor = dual_cfg.get("auto_monitor")
-    if auto_monitor is None:
-        auto_monitor = True
-    work_path, monitor_meta, monitor_path = prepare_monitor_work_image(
-        full_path, run_dir, enabled=bool(auto_monitor)
-    )
-
-    # —— 1) 自动窗缝：相对「屏内图」覆盖左右 crop；失败则用配置 crop ——
-    auto_seam = dual_cfg.get("auto_seam")
-    if auto_seam is None:
-        auto_seam = True
-    seam_meta: Dict[str, Any] = {"enabled": bool(auto_seam)}
-    left_crop_override: Optional[Tuple[float, float, float, float]] = None
-    right_crop_override: Optional[Tuple[float, float, float, float]] = None
-    if auto_seam:
-        try:
-            fb = float(dual_cfg.get("seam_fallback") or 0.55)
-        except (TypeError, ValueError):
-            fb = 0.55
-        try:
-            gap = float(dual_cfg.get("seam_gap") or 0.012)
-        except (TypeError, ValueError):
-            gap = 0.012
-        seam_meta = detect_dual_seam(work_path, fallback=fb)
-        seam_meta["enabled"] = True
-        seam_meta["gap"] = gap
-        if seam_meta.get("ok"):
-            left_crop_override, right_crop_override = seam_to_side_crops(
-                float(seam_meta["seam"]), gap=gap
-            )
-            logger.info(
-                "双屏采用自动缝 seam=%.4f mode=%s left=%s right=%s (on=%s)",
-                seam_meta["seam"],
-                seam_meta.get("mode"),
-                left_crop_override,
-                right_crop_override,
-                work_path.name,
-            )
-        else:
-            logger.info(
-                "双屏自动缝未命中，使用配置 crop fallback_seam=%.4f",
-                float(seam_meta.get("seam") or fb),
-            )
-    try:
-        import json as _json
-
-        (run_dir / "seam.json").write_text(
-            _json.dumps(seam_meta, ensure_ascii=False, indent=2),
-            encoding="utf-8",
-        )
-    except Exception:
-        logger.exception("写 seam.json 失败")
-
     side_jobs: List[Dict[str, Any]] = []
+
     for side in ("left", "right"):
         sc = screens[side]
-        crop_raw = sc.get("crop") or DEFAULT_DUAL[side]["crop"]
-        crop = parse_crop(str(crop_raw))
-        if crop is None:
-            raise ValueError(f"capture.dual.{side}.crop 无效: {crop_raw!r}")
-        if side == "left" and left_crop_override is not None:
-            crop = left_crop_override
-        elif side == "right" and right_crop_override is not None:
-            crop = right_crop_override
-        tag_prefix = str(sc.get("tag") or DEFAULT_DUAL[side]["tag"]).strip()
-        pane_path = work_root / f"{side}.jpg"
+        cam = cams[side]
+        src = path_by_side[side]
+        if src is None:
+            msg = capture_errors.get(side) or f"{side} 摄像头未抓到图"
+            logger.warning("%s跳过识别：%s", cam_log_prefix(side), msg)
+            sides[side] = _side_camera_failed(
+                side, {**sc, **cam}, message=msg, min_points=min_points
+            )
+            side_ocr_ms[side] = 0
+            continue
+
+        pane_path = run_dir / f"{side}.jpg"
+        try:
+            shutil.copy2(src, pane_path)
+        except Exception:
+            logger.exception("%s复制侧图失败 src=%s", cam_log_prefix(side), src)
+            pane_path = src
+
         side_debug = run_dir / side
         side_debug.mkdir(parents=True, exist_ok=True)
-        # 左右裁相对屏内图（或整图回退）
-        _crop_to_file(work_path, crop, pane_path)
-        day = side_days[side]
-        logger.info(
-            "双屏 OCR %s crop=%s tag=%s fallback_date=%s → %s",
-            side,
-            crop,
-            tag_prefix,
-            day.strftime("%Y-%m-%d") if day else None,
-            pane_path,
+        work_path, monitor_meta, monitor_path = prepare_monitor_work_image(
+            pane_path, side_debug, enabled=bool(auto_monitor)
         )
+        monitors[side] = {
+            **(monitor_meta or {}),
+            "monitor_image": monitor_path,
+            "source": str(src),
+        }
+        tag_prefix = str(cam.get("tag") or DEFAULT_CAMERA[side]["tag"]).strip()
         side_jobs.append(
             {
                 "side": side,
                 "sc": sc,
-                "crop": crop,
+                "cam": cam,
                 "tag_prefix": tag_prefix,
-                "pane_path": pane_path,
+                "pane_path": work_path,
+                "source_path": str(src),
                 "side_debug": side_debug,
-                "day": day,
             }
         )
 
     def _run_side_job(job: Dict[str, Any]) -> Tuple[str, Dict[str, Any], int]:
+        side = job["side"]
+        pfx = cam_log_prefix(side)
+        logger.info("%s开始识别", pfx)
         t_side = time.perf_counter()
         ocr_dict = _ocr_one_side(
             pane_image=job["pane_path"],
             tag_prefix=job["tag_prefix"],
             ocr_cfg=ocr_cfg,
             workdir=workdir,
-            base_date=job["day"],
+            base_date=None,
             export_excel=export_excel,
             debug_dir=job["side_debug"],
             sanitize=get_ocr_sanitize_cfg(cfg),
             fix_decimal=get_ocr_fix_decimal_cfg(cfg),
-            date_cfg=get_ocr_date_cfg(cfg, layout="dual", side=job["side"]),
-            table_crop=get_ocr_table_crop(cfg, layout="dual", side=job["side"]),
+            date_cfg=get_ocr_date_cfg(cfg, layout="dual", side=side),
+            table_crop=get_ocr_table_crop(cfg, layout="dual", side=side),
+            side=side,
         )
-        return job["side"], ocr_dict, _elapsed_ms(t_side)
+        ms = _elapsed_ms(t_side)
+        date_str = ocr_dict.get("base_date") or "-"
+        pts_n = len(ocr_dict.get("points") or [])
+        timing = ocr_dict.get("timing") or {}
+        logger.info(
+            "%s识别结束 ok=%s date=%s points=%s date_ms=%s table_ms=%s total_ms=%s",
+            pfx,
+            bool(ocr_dict.get("ok")),
+            date_str,
+            pts_n,
+            timing.get("date_ms", 0),
+            timing.get("table_ms", 0),
+            ms,
+        )
+        return side, ocr_dict, ms
 
     ocr_by_side: Dict[str, Dict[str, Any]] = {}
     parallel = get_ocr_parallel_sides(cfg) and len(side_jobs) > 1
     if parallel:
-        logger.info("双屏 OCR 并行 left|right")
+        logger.info("双摄 OCR 并行 left|right")
         with ThreadPoolExecutor(max_workers=2) as pool:
             futs = {pool.submit(_run_side_job, job): job["side"] for job in side_jobs}
             for fut in as_completed(futs):
@@ -419,12 +446,12 @@ def split_and_ocr(
     for job in side_jobs:
         side = job["side"]
         sc = job["sc"]
-        crop = job["crop"]
         tag_prefix = job["tag_prefix"]
         pane_path = job["pane_path"]
         side_debug = job["side_debug"]
         ocr_dict = ocr_by_side[side]
         pts = _points_payload(ocr_dict, side)
+        pfx = cam_log_prefix(side)
         date_failed = str(ocr_dict.get("date_source") or "") in ("failed", "disabled") or (
             ocr_dict.get("ok") is False
             and str(ocr_dict.get("reason") or "").startswith("date")
@@ -440,8 +467,8 @@ def split_and_ocr(
             }
             side_ok = False
             logger.warning(
-                "双屏 %s 日期 OCR 失败：%s，本侧跳过表格/不写 PI",
-                side,
+                "%s跳过写 PI：日期识别失败 — %s",
+                pfx,
                 quality.get("message"),
             )
         else:
@@ -449,8 +476,8 @@ def split_and_ocr(
             side_ok = bool(quality.get("ok"))
             if not side_ok:
                 logger.warning(
-                    "双屏 %s 识别失败：有效点数 %s < min_points=%s，本侧不写 PI",
-                    side,
+                    "%s跳过写 PI：有效点数 %s < min_points=%s",
+                    pfx,
                     quality.get("point_count"),
                     quality.get("min_points"),
                 )
@@ -458,17 +485,19 @@ def split_and_ocr(
         all_points.extend(pts)
         if side_ok:
             write_points.extend(pts)
-        resolved_day = ocr_dict.get("base_date")
+        cam = job.get("cam") or cams[side]
         side_info: Dict[str, Any] = {
             "ok": side_ok,
-            "id": str(sc.get("id") or DEFAULT_DUAL[side]["id"]),
-            "title": str(sc.get("title") or side),
+            "id": side,
+            "title": side,
             "tag": tag_prefix,
-            "base_date": resolved_day,
+            "host": str(cam.get("host") or ""),
+            "type": str(cam.get("type") or ""),
+            "base_date": ocr_dict.get("base_date"),
             "date_source": ocr_dict.get("date_source"),
             "date_ocr": ocr_dict.get("date_ocr") or {},
-            "crop": list(crop),
             "image_path": str(pane_path),
+            "source_path": job.get("source_path"),
             "ocr": ocr_dict,
             "points": pts,
             "point_count": len(pts),
@@ -479,20 +508,22 @@ def split_and_ocr(
             "ocr_ms": side_ocr_ms[side],
             "date_ms": int((ocr_dict.get("timing") or {}).get("date_ms") or 0),
             "table_ms": int((ocr_dict.get("timing") or {}).get("table_ms") or 0),
+            "monitor": monitors.get(side),
         }
         if not side_ok:
             side_info["reason"] = quality.get("reason") or ocr_dict.get("reason")
             side_info["message"] = quality.get("message") or ocr_dict.get("message")
         sides[side] = side_info
-    ocr_ms = _elapsed_ms(t_ocr_all)
 
+    ocr_ms = _elapsed_ms(t_ocr_all)
     left_ok = bool(sides["left"].get("ok"))
     right_ok = bool(sides["right"].get("ok"))
     out: Dict[str, Any] = {
         "ok": left_ok or right_ok,
         "mode": "dual",
-        "image_path": str(full_path),
-        "work_image_path": str(work_path),
+        "capture_mode": (
+            "double_camera" if get_capture_mode(cfg) == "double" else get_capture_mode(cfg)
+        ),
         "left": sides["left"],
         "right": sides["right"],
         "left_ok": left_ok,
@@ -500,12 +531,8 @@ def split_and_ocr(
         "points": all_points,
         "min_points": min_points,
         "artifacts_dir": str(run_dir),
-        "monitor": monitor_meta,
-        "seam": seam_meta,
         "timing": {
             "ocr_ms": ocr_ms,
-            "monitor_ms": int(monitor_meta.get("ms") or 0),
-            "seam_ms": int(seam_meta.get("ms") or 0),
             "left_ocr_ms": side_ocr_ms.get("left", 0),
             "right_ocr_ms": side_ocr_ms.get("right", 0),
             "left_date_ms": int(sides["left"].get("date_ms") or 0),
@@ -516,18 +543,15 @@ def split_and_ocr(
             "total_ms": 0,
         },
     }
-    if monitor_path:
-        out["monitor_image"] = monitor_path
+    if path_by_side["left"]:
+        out["left_image"] = str(path_by_side["left"])
+    if path_by_side["right"]:
+        out["right_image"] = str(path_by_side["right"])
     if not left_ok and not right_ok:
         out["reason"] = "points_below_min"
         out["message"] = (
-            f"左右屏有效点数均低于 min_points={min_points}，本轮识别失败，不写 PI"
+            f"左右屏有效点数均低于 min_points={min_points} 或抓拍失败，本轮不写 PI"
         )
-    if src_copy:
-        out["source_copy"] = src_copy
-    if upload_name:
-        out["upload_name"] = str(upload_name).strip()
-        out["uploaded"] = True
 
     if write_pi:
         if write_points:
@@ -562,7 +586,6 @@ def split_and_ocr(
         else:
             out["ok"] = False
     else:
-        # 联调 / OCR-only：与单屏 ocr_only 一致，标记未写 PI
         out["pi"] = {
             "ok": None,
             "written": 0,
@@ -574,19 +597,21 @@ def split_and_ocr(
             "sides_skipped": ["left", "right"],
         }
 
-    # 部分成功：写完 PI 后再汇总说明，便于首页展示
     if left_ok != right_ok:
         out["reason"] = "partial_side_failed"
         fail_side = "左侧" if not left_ok else "右侧"
         ok_side = "右侧" if not left_ok else "左侧"
         fail_n = int(sides["left" if not left_ok else "right"].get("point_count") or 0)
-        fail_detail = f"有效点数 {fail_n} < min_points={min_points}"
+        fail_detail = (
+            sides["left" if not left_ok else "right"].get("message")
+            or f"有效点数 {fail_n} < min_points={min_points}"
+        )
         if write_pi:
             sides_written = (out.get("pi") or {}).get("sides_written") or []
             ok_key = "right" if not left_ok else "left"
             did_write = ok_key in sides_written and bool((out.get("pi") or {}).get("ok"))
             out["message"] = (
-                f"{fail_side}识别未达下限（{fail_detail}），该侧未写 PI；"
+                f"{fail_side}未达标（{fail_detail}），该侧未写 PI；"
                 + (
                     f"{ok_side}已达标并写入"
                     if did_write
@@ -594,10 +619,7 @@ def split_and_ocr(
                 )
             )
         else:
-            out["message"] = (
-                f"{fail_side}识别未达下限（{fail_detail}）；"
-                f"{ok_side}识别达标"
-            )
+            out["message"] = f"{fail_side}未达标（{fail_detail}）；{ok_side}识别达标"
 
     out["timing"]["total_ms"] = _elapsed_ms(t_all)
     if persist:
@@ -609,14 +631,51 @@ def split_and_ocr(
     return out
 
 
+def split_and_ocr(
+    image_path: str,
+    *,
+    base_date: Optional[datetime] = None,
+    left_date: Optional[datetime] = None,
+    right_date: Optional[datetime] = None,
+    write_pi: bool = False,
+    export_excel: bool = True,
+    trigger: str = "manual",
+    persist: bool = True,
+    upload_name: Optional[str] = None,
+) -> Dict[str, Any]:
+    """
+    兼容旧上传接口：若只给一张图，则左右都用同一张做 OCR（不再分缝）。
+    正常抓拍请用 run_pipeline_dual / ocr_side_images。
+    """
+    del base_date, left_date, right_date
+    path = str(image_path)
+    out = ocr_side_images(
+        path,
+        path,
+        write_pi=write_pi,
+        export_excel=export_excel,
+        trigger=trigger,
+        persist=persist,
+    )
+    out["image_path"] = path
+    out["legacy_single_upload"] = True
+    if upload_name:
+        out["upload_name"] = str(upload_name).strip()
+        out["uploaded"] = True
+    return out
+
+
 def run_pipeline_dual(
     base_date: Optional[datetime] = None,
     left_date: Optional[datetime] = None,
     right_date: Optional[datetime] = None,
     *,
     trigger: str = "manual",
+    do_ocr: bool = True,
+    do_pi: bool = True,
 ) -> Dict[str, Any]:
-    """一键双屏：抓图 → 左右独立 OCR/Excel → 按点内 tag 写 PI。"""
+    """一键双摄：并行抓两路 → 各自 OCR → 按点内 tag 写 PI。"""
+    del base_date, left_date, right_date
     from datetime import datetime as _dt
 
     from .run_store import persist_pipeline_result
@@ -624,31 +683,77 @@ def run_pipeline_dual(
     t_all = time.perf_counter()
     started_at = _dt.now().strftime("%Y-%m-%d %H:%M:%S")
     cfg = get_config()
-    cam = build_camera_client(cfg, ROOT_DIR)
+
     t_cap = time.perf_counter()
-    full_path = Path(cam.capture())
+    captured = capture_dual_cameras(cfg)
     capture_ms = _elapsed_ms(t_cap)
-    result = split_and_ocr(
-        str(full_path),
-        base_date=base_date,
-        left_date=left_date,
-        right_date=right_date,
-        write_pi=True,
+
+    left_path = str(captured["left"]) if "left" in captured else None
+    right_path = str(captured["right"]) if "right" in captured else None
+    capture_errors: Dict[str, str] = {}
+    for side in ("left", "right"):
+        if side not in captured:
+            capture_errors[side] = f"{side} 摄像头抓拍失败"
+
+    if not do_ocr:
+        out = {
+            "ok": True,
+            "mode": "dual",
+            "capture_mode": (
+                "double_camera"
+                if get_capture_mode(cfg) == "double"
+                else get_capture_mode(cfg)
+            ),
+            "skipped_ocr": True,
+            "capture": {
+                "left_image": left_path,
+                "right_image": right_path,
+                "errors": capture_errors,
+            },
+            "timing": {"capture_ms": capture_ms, "total_ms": _elapsed_ms(t_all)},
+        }
+        return persist_pipeline_result(
+            out, mode="dual", trigger=trigger, started_at=started_at
+        )
+
+    result = ocr_side_images(
+        left_path,
+        right_path,
+        write_pi=bool(do_pi),
         export_excel=True,
         trigger=trigger,
         persist=False,
+        capture_errors=capture_errors,
     )
+    cams = get_camera_defs(cfg)
     result["capture"] = {
-        "image_path": str(full_path),
-        "size": full_path.stat().st_size,
-        "left_image": result["left"]["image_path"],
-        "right_image": result["right"]["image_path"],
+        "left_image": left_path,
+        "right_image": right_path,
+        "errors": capture_errors,
+        "left": {
+            "host": cams["left"].get("host") or "",
+            "type": cams["left"].get("type") or "",
+            "tag": cams["left"].get("tag") or "",
+        },
+        "right": {
+            "host": cams["right"].get("host") or "",
+            "type": cams["right"].get("type") or "",
+            "tag": cams["right"].get("tag") or "",
+        },
     }
+    if left_path:
+        result["left_image"] = left_path
+    if right_path:
+        result["right_image"] = right_path
     timing = dict(result.get("timing") or {})
     timing["capture_ms"] = capture_ms
-    # 总耗时含抓图；split 内 total 不含外层 capture
     timing["total_ms"] = _elapsed_ms(t_all)
     result["timing"] = timing
     return persist_pipeline_result(
         result, mode="dual", trigger=trigger, started_at=started_at
     )
+
+
+# 保留符号供旧代码 / 调试：分缝已从主流程移除
+def _crop_to_file(*_args: Any, **_kwargs: Any) -> Path:
+    raise RuntimeError("double-camera 分支不再整图分缝裁剪")

@@ -8,7 +8,7 @@ import os
 import sys
 from datetime import datetime
 from pathlib import Path
-from typing import Optional
+from typing import List, Optional
 
 # 尽早限制 OpenMP/BLAS，避免 RapidOCR 默认占满 CPU（识别时浏览器极慢）
 for _k, _v in (
@@ -38,7 +38,6 @@ from starlette.concurrency import run_in_threadpool
 from .config import (
     DATA_DIR,
     ROOT_DIR,
-    get_capture_tag,
     get_config,
     get_ocr_onnx_threads,
     load_config,
@@ -48,8 +47,10 @@ from .config import (
 from .excel_export import export_ocr_excel
 from .pipeline import capture_only, curve, ocr_only, run_pipeline, write_points_to_pi
 from .pipeline_dual import (
+    get_camera_defs,
     get_capture_mode,
     get_dual_defs,
+    ocr_side_images,
     run_pipeline_dual,
     split_and_ocr,
 )
@@ -297,7 +298,11 @@ def api_ocr(body: OcrRequest):
 
 
 class DualOcrRequest(BaseModel):
-    image_path: str = Field(..., description="整图路径（含左右两个标签页）")
+    image_path: Optional[str] = Field(
+        None, description="兼容：单图路径（左右共用同一张，调试用）"
+    )
+    left_image: Optional[str] = Field(None, description="左摄像头整屏图路径")
+    right_image: Optional[str] = Field(None, description="右摄像头整屏图路径")
     left_date: Optional[str] = Field(
         None, description="左机组业务日期回退 yyyy-MM-dd（日期 OCR 失败时使用）"
     )
@@ -311,16 +316,26 @@ class DualOcrRequest(BaseModel):
 
 @app.post("/api/ocr/dual")
 def api_ocr_dual(body: DualOcrRequest):
-    """双屏分步 OCR：裁左右 → 独立识别（不写 PI）。左右日期/测点前缀互不影响。"""
-    path = Path(body.image_path)
-    if not path.is_file():
-        raise HTTPException(400, f"图片不存在: {body.image_path}")
+    """双摄 OCR：左右各一张整屏图独立识别（不写 PI）。也可只传 image_path 调试。"""
+    left = (body.left_image or body.image_path or "").strip() or None
+    right = (body.right_image or body.image_path or "").strip() or None
+    if not left and not right:
+        raise HTTPException(400, "请提供 left_image/right_image 或 image_path")
+    for label, p in (("left", left), ("right", right)):
+        if p and not Path(p).is_file():
+            raise HTTPException(400, f"{label} 图片不存在: {p}")
     try:
-        return split_and_ocr(
-            str(path),
-            base_date=_parse_base_date(body.base_date),
-            left_date=_parse_base_date(body.left_date),
-            right_date=_parse_base_date(body.right_date),
+        if body.image_path and not body.left_image and not body.right_image:
+            return split_and_ocr(
+                str(body.image_path),
+                write_pi=False,
+                export_excel=True,
+                trigger="debug",
+                persist=True,
+            )
+        return ocr_side_images(
+            left,
+            right,
             write_pi=False,
             export_excel=True,
             trigger="debug",
@@ -333,40 +348,68 @@ def api_ocr_dual(body: DualOcrRequest):
 
 @app.post("/api/ocr/dual/upload")
 async def api_ocr_dual_upload(
-    file: UploadFile = File(...),
+    file: Optional[UploadFile] = File(None),
+    left_file: Optional[UploadFile] = File(None),
+    right_file: Optional[UploadFile] = File(None),
     left_date: Optional[str] = None,
     right_date: Optional[str] = None,
     base_date: Optional[str] = None,
 ):
-    """本机双屏图上传：临时文件左右独立 OCR（不写 captures；过程图仍走 ocr_runs）。"""
+    """上传识别：可传 left_file+right_file 两张整屏图；或单 file（左右共用，调试）。"""
     import tempfile
 
-    suffix = Path(file.filename or "upload.jpg").suffix.lower() or ".jpg"
-    if suffix not in {".jpg", ".jpeg", ".png", ".bmp", ".webp", ".tif", ".tiff"}:
-        raise HTTPException(400, f"不支持的图片格式: {suffix}")
-    tmp_path: Optional[Path] = None
-    try:
-        content = await file.read()
+    del left_date, right_date, base_date
+    allowed = {".jpg", ".jpeg", ".png", ".bmp", ".webp", ".tif", ".tiff"}
+    tmp_paths: List[Path] = []
+
+    async def _save_one(up: UploadFile, prefix: str) -> Path:
+        suffix = Path(up.filename or "upload.jpg").suffix.lower() or ".jpg"
+        if suffix not in allowed:
+            raise HTTPException(400, f"不支持的图片格式: {suffix}")
+        content = await up.read()
         if not content:
-            raise HTTPException(400, "空文件")
-        with tempfile.NamedTemporaryFile(delete=False, suffix=suffix, prefix="ocr_dual_upload_") as tmp:
+            raise HTTPException(400, f"空文件: {up.filename}")
+        with tempfile.NamedTemporaryFile(
+            delete=False, suffix=suffix, prefix=prefix
+        ) as tmp:
             tmp.write(content)
-            tmp_path = Path(tmp.name)
+            path = Path(tmp.name)
+        tmp_paths.append(path)
+        return path
+
+    try:
+        if left_file is not None or right_file is not None:
+            left_path = (
+                await _save_one(left_file, "ocr_dual_L_") if left_file else None
+            )
+            right_path = (
+                await _save_one(right_file, "ocr_dual_R_") if right_file else None
+            )
+            result = await run_in_threadpool(
+                ocr_side_images,
+                str(left_path) if left_path else None,
+                str(right_path) if right_path else None,
+                write_pi=False,
+                export_excel=True,
+                trigger="debug",
+                persist=True,
+            )
+            result["uploaded"] = True
+            return result
+
+        if file is None:
+            raise HTTPException(400, "请上传 left_file/right_file 或 file")
+        tmp_path = await _save_one(file, "ocr_dual_upload_")
         upload_name = file.filename or "upload"
-        # 同步 OCR 必须进线程池，否则会堵死事件循环，历史页 /api/runs 全部无响应
         result = await run_in_threadpool(
             split_and_ocr,
             str(tmp_path),
-            base_date=_parse_base_date(base_date),
-            left_date=_parse_base_date(left_date),
-            right_date=_parse_base_date(right_date),
             write_pi=False,
             export_excel=True,
             trigger="debug",
             persist=True,
             upload_name=upload_name,
         )
-        # 临时文件马上删除：预览用 ocr_runs 的 00_source；展示名用原始上传文件名
         result["upload_name"] = upload_name
         result["image_path"] = result.get("source_copy") or upload_name
         result["uploaded"] = True
@@ -378,11 +421,11 @@ async def api_ocr_dual_upload(
         logger.exception("dual ocr upload failed")
         raise HTTPException(500, str(e)) from e
     finally:
-        if tmp_path is not None:
+        for p in tmp_paths:
             try:
-                tmp_path.unlink(missing_ok=True)
+                p.unlink(missing_ok=True)
             except OSError:
-                logger.warning("failed to remove temp dual upload: %s", tmp_path)
+                logger.warning("failed to remove temp dual upload: %s", p)
 
 
 @app.post("/api/ocr/upload")
@@ -472,16 +515,17 @@ def api_pi_write(body: WriteRequest):
 def api_get_pi_config():
     cfg = get_config()
     pi = cfg.get("pi", {}) or {}
-    prefix = get_capture_tag(cfg)
-    dual = get_dual_defs(cfg)
+    cams = get_camera_defs(cfg)
     return {
         "ok": True,
-        "tag": prefix,
-        "mode": get_capture_mode(cfg),
-        "single": {"tag": prefix},
-        "dual": {
-            side: {"tag": sc.get("tag"), "title": sc.get("title"), "id": sc.get("id")}
-            for side, sc in dual.items()
+        "capture_mode": "double_camera",
+        "cameras": {
+            side: {
+                "tag": sc.get("tag"),
+                "host": sc.get("host"),
+                "type": sc.get("type"),
+            }
+            for side, sc in cams.items()
         },
         "row_tags": [],
         "server": pi.get("server", ""),
@@ -547,19 +591,28 @@ class DualRunRequest(BaseModel):
 
 @app.get("/api/config/view")
 def api_get_view_config():
-    """单屏 / 双屏配置（capture.mode 对应 capture.single / capture.dual）。"""
+    """画面模式 single|dual|double + cameras + capture.dual 裁剪。"""
     from .config import get_single_cfg
 
     cfg = get_config()
     mode = get_capture_mode(cfg)
-    single = get_single_cfg(cfg)
     dual = get_dual_defs(cfg)
+    cams = get_camera_defs(cfg)
+    single = get_single_cfg(cfg)
     return {
         "ok": True,
         "mode": mode,
-        "tag": get_capture_tag(cfg),
+        "capture_mode": "double_camera" if mode == "double" else mode,
+        "cameras": {
+            side: {
+                "type": sc.get("type"),
+                "host": sc.get("host"),
+                "tag": sc.get("tag"),
+            }
+            for side, sc in cams.items()
+        },
         "single": {
-            "tag": single.get("tag") or get_capture_tag(cfg),
+            "tag": single.get("tag") or "",
             "crop": single.get("crop") or "",
             "table_crop": single.get("table_crop") or "",
         },
@@ -567,9 +620,11 @@ def api_get_view_config():
             side: {
                 "id": sc.get("id"),
                 "title": sc.get("title"),
-                "crop": sc.get("crop"),
                 "table_crop": sc.get("table_crop"),
+                "date_crop": sc.get("date_crop"),
                 "tag": sc.get("tag"),
+                "host": sc.get("host"),
+                "type": sc.get("type"),
             }
             for side, sc in dual.items()
         },
@@ -577,12 +632,12 @@ def api_get_view_config():
 
 
 class ViewModeRequest(BaseModel):
-    mode: str = Field(..., description="single | dual")
+    mode: str = Field(..., description="single | dual | double")
 
 
 @app.put("/api/config/view/mode")
 def api_put_view_mode(body: ViewModeRequest):
-    """切换首页单屏/双屏模式，写入 capture.mode。"""
+    """切换联调页画面模式，写入 capture.mode。"""
     try:
         return update_capture_mode(body.mode)
     except ValueError as e:
@@ -594,12 +649,10 @@ def api_put_view_mode(body: ViewModeRequest):
 
 @app.post("/api/run")
 def api_run(body: RunRequest = RunRequest()):
-    """单屏单页流水线（保持原行为，不受 capture.mode 影响）。"""
+    """兼容旧入口：本分支转发到双摄流水线。"""
+    del body
     try:
-        return run_pipeline(
-            base_date=_parse_base_date(body.base_date),
-            trigger="manual",
-        )
+        return run_pipeline_dual(trigger="manual")
     except Exception as e:
         logger.exception("pipeline failed")
         raise HTTPException(500, str(e)) from e
@@ -607,14 +660,10 @@ def api_run(body: RunRequest = RunRequest()):
 
 @app.post("/api/run/dual")
 def api_run_dual(body: DualRunRequest = DualRunRequest()):
-    """双屏左右：抓图 → 左右独立 OCR（各自日期/测点前缀）→ 按点内 tag 写 PI。"""
+    """双摄像头：并行抓拍两路 → 各自 OCR（测点前缀 dual.*.tag）→ 写 PI。"""
+    del body
     try:
-        return run_pipeline_dual(
-            base_date=_parse_base_date(body.base_date),
-            left_date=_parse_base_date(body.left_date),
-            right_date=_parse_base_date(body.right_date),
-            trigger="manual",
-        )
+        return run_pipeline_dual(trigger="manual")
     except Exception as e:
         logger.exception("dual pipeline failed")
         raise HTTPException(500, str(e)) from e

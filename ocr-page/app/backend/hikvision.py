@@ -25,11 +25,11 @@ from .camera_common import (
 
 logger = logging.getLogger(__name__)
 
-# 兼容旧 import：from app.backend.hikvision import HikvisionCaptureError, format_capture_stem
 __all__ = [
     "HikvisionCaptureError",
     "HikvisionIsapiClient",
     "build_camera_client",
+    "build_camera_client_for_side",
     "format_capture_stem",
     "normalize_stream_channel",
 ]
@@ -64,6 +64,9 @@ class HikvisionIsapiClient:
         channel: str = "101",
         timeout_sec: float = 15,
         capture_dir: str = "data/captures",
+        *,
+        name_label: str = "",
+        side: str = "",
     ):
         self.host = host.strip()
         self.port = int(port)
@@ -72,12 +75,13 @@ class HikvisionIsapiClient:
         self.channel = normalize_stream_channel(channel)
         self.timeout_sec = timeout_sec
         self.capture_dir = Path(capture_dir)
+        self.name_label = str(name_label or side or "").strip()
+        self.side = str(side or "").strip()
 
     def _urls(self) -> List[str]:
         """优先标准 101 路径，再试物理通道号写法（部分固件兼容）。"""
         base = f"http://{self.host}:{self.port}/ISAPI/Streaming/channels"
         urls = [f"{base}/{self.channel}/picture"]
-        # 若规范后是 101，也试一下 /1/picture（少数固件）
         if self.channel.endswith("01") and len(self.channel) == 3:
             phys = str(int(self.channel) // 100)
             alt = f"{base}/{phys}/picture"
@@ -115,7 +119,7 @@ class HikvisionIsapiClient:
                 if resp.status_code == 401:
                     last_err = (
                         f"401 Unauthorized ({auth_name}) {url} — "
-                        f"请核对 config.yaml 中 camera.user / camera.password "
+                        f"请核对 cameras.*.user / password "
                         f"（当前用户={self.user!r}），并在相机网页确认账号可预览。"
                     )
                     logger.warning(last_err)
@@ -142,52 +146,92 @@ class HikvisionIsapiClient:
                 day = now.strftime("%Y%m%d")
                 out_dir = self.capture_dir / day
                 out_dir.mkdir(parents=True, exist_ok=True)
-                # 文件名用直观时刻（Windows 不能用冒号，故用 9-09 / 10-20）；
-                # 外层目录 YYYYMMDD 表示日期，文件名表示当日时刻。
-                path = _unique_time_path(out_dir, now)
+                path = _unique_time_path(out_dir, now, label=self.name_label)
                 path.write_bytes(resp.content)
+                from .camera_common import cam_log_prefix
+
                 logger.info(
-                    "抓图成功 %s (%d bytes) <- %s [%s]",
+                    "%s抓图完成 path=%s bytes=%d type=isapi host=%s",
+                    cam_log_prefix(self.side or self.name_label),
                     path,
                     len(resp.content),
-                    url,
-                    auth_name,
+                    self.host,
                 )
                 return path
 
         raise HikvisionCaptureError(last_err or "抓图失败：未知错误")
 
 
-def build_camera_client(cfg: Dict[str, Any], root_dir: Path):
-    """按 camera.type 构建抓图客户端。
+def build_camera_client(
+    cam_cfg: Dict[str, Any],
+    *,
+    capture_dir: str,
+    side: str = "",
+):
+    """按单路 cameras.{side} 配置构建抓图客户端。
 
     - mvs / gige / hikrobot：海康机器人 GigE（MVS SDK）
-    - isapi（默认）：海康监控机 HTTP ISAPI
+    - isapi：海康监控机 HTTP ISAPI
     """
-    from .config import resolve_project_path
-
-    cam = cfg.get("camera", {})
-    cap = cfg.get("capture", {})
-    capture_dir = resolve_project_path(cap.get("dir", "data/captures"))
-    ctype = str(cam.get("type", "isapi") or "isapi").strip().lower()
+    cam = dict(cam_cfg or {})
+    ctype = str(cam.get("type") or "").strip().lower()
+    if not ctype:
+        raise HikvisionCaptureError(
+            f"cameras.{side or '?'}.type 未配置（mvs | isapi）"
+        )
+    name_label = str(side or cam.get("name") or "").strip() or side
+    host = str(cam.get("host") or "").strip()
+    if not host:
+        raise HikvisionCaptureError(
+            f"cameras.{side or '?'}.host 未配置"
+        )
 
     if ctype in ("mvs", "gige", "hikrobot"):
         from .hikrobot_mvs import HikrobotMvsClient
 
         return HikrobotMvsClient(
-            host=str(cam.get("host", "127.0.0.1")),
+            host=host,
             timeout_sec=float(cam.get("timeout_sec", 15)),
             capture_dir=str(capture_dir),
             net_export=str(cam.get("net_export", "") or ""),
             jpeg_quality=int(cam.get("jpeg_quality", 80)),
+            name_label=name_label,
+            side=side,
+        )
+
+    if ctype != "isapi":
+        raise HikvisionCaptureError(
+            f"cameras.{side or '?'}.type={ctype!r} 不支持，请用 mvs 或 isapi"
         )
 
     return HikvisionIsapiClient(
-        host=cam.get("host", "127.0.0.1"),
+        host=host,
         port=int(cam.get("port", 80)),
         user=cam.get("user", "admin"),
         password=cam.get("password", ""),
         channel=str(cam.get("channel", "101")),
         timeout_sec=float(cam.get("timeout_sec", 15)),
         capture_dir=str(capture_dir),
+        name_label=name_label,
+        side=side,
     )
+
+
+def build_camera_client_for_side(
+    cfg: Dict[str, Any],
+    root_dir: Path,
+    side: str,
+    cam_cfg: Optional[Dict[str, Any]] = None,
+):
+    """从 cfg.cameras.{side} 构建客户端。"""
+    from .config import resolve_project_path
+
+    del root_dir
+    cams = cfg.get("cameras") or {}
+    side_cam = dict(cam_cfg if cam_cfg is not None else (cams.get(side) or {}))
+    if not side_cam:
+        raise HikvisionCaptureError(f"cameras.{side} 未配置")
+    capture_dir = resolve_project_path(
+        (cfg.get("capture") or {}).get("dir", "data/captures")
+    )
+    return build_camera_client(side_cam, capture_dir=str(capture_dir), side=side)

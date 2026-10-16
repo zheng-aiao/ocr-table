@@ -1,0 +1,1045 @@
+{
+  "id": "dual_20261015_174150_357",
+  "mode": "dual",
+  "trigger": "debug",
+  "started_at": "2026-10-15 17:50:53",
+  "finished_at": "2026-10-15 17:50:53",
+  "ok": true,
+  "reason": null,
+  "message": null,
+  "point_count": 29,
+  "min_points": 8,
+  "upload_name": "",
+  "display_name": "17-41_left.jpg",
+  "capture_path": "D:\\yw\\gx-ocr\\ocr-page\\data\\captures\\20261015\\17-41_left.jpg",
+  "capture_url": "/data/captures/20261015/17-41_left.jpg",
+  "source_path": "",
+  "source_url": "/data/captures/20261015/17-41_left.jpg",
+  "artifacts_dir": "D:\\yw\\gx-ocr\\ocr-page\\data\\ocr_runs\\dual\\20261015_174150_357",
+  "artifacts_url": "/data/ocr_runs/dual/20261015_174150_357",
+  "excel_path": "",
+  "excel_url": "",
+  "pi": {
+    "ok": null,
+    "written": 0,
+    "total": 0,
+    "skipped": true,
+    "reason": "ocr_only",
+    "message": null,
+    "sides_written": [],
+    "sides_skipped": [
+      "left",
+      "right"
+    ]
+  },
+  "quality": {},
+  "timing": {
+    "ocr_ms": 542834,
+    "left_ocr_ms": 216698,
+    "right_ocr_ms": 326113,
+    "left_date_ms": 61846,
+    "left_table_ms": 154402,
+    "right_date_ms": 35933,
+    "right_table_ms": 290161,
+    "pi_ms": 0,
+    "total_ms": 542852
+  },
+  "ocr_ms": 542834,
+  "total_ms": 542852,
+  "capture_ms": null,
+  "pi_ms": 0,
+  "monitor_path": "",
+  "monitor_url": "",
+  "left_ok": true,
+  "right_ok": true,
+  "left": {
+    "ok": true,
+    "id": "left",
+    "title": "left",
+    "tag": "GX.DEMO.OCR.L",
+    "host": "192.168.16.6",
+    "type": "mvs",
+    "base_date": "2026-10-15",
+    "date_source": "ocr",
+    "date_ocr": {
+      "ok": true,
+      "date_str": "2026-10-15",
+      "raw_texts": [
+        "日期",
+        "2026/10/15",
+        "口",
+        "单MNN"
+      ],
+      "crop": [
+        0.0911,
+        0.2417,
+        0.4113,
+        0.3199
+      ],
+      "image_path": "D:\\yw\\gx-ocr\\ocr-page\\data\\ocr_runs\\dual\\20261015_174150_357\\left\\date_crop.jpg",
+      "best_image_path": "D:\\yw\\gx-ocr\\ocr-page\\data\\ocr_runs\\dual\\20261015_174150_357\\left\\date_crop_best.jpg",
+      "candidate_image_paths": [
+        "D:\\yw\\gx-ocr\\ocr-page\\data\\ocr_runs\\dual\\20261015_174150_357\\left\\date_locate.jpg",
+        "D:\\yw\\gx-ocr\\ocr-page\\data\\ocr_runs\\dual\\20261015_174150_357\\left\\date_crop.jpg"
+      ],
+      "reason": "full_ymd_auto_locate#0",
+      "attempts": [
+        {
+          "crop": [
+            0.0911,
+            0.2417,
+            0.4113,
+            0.3199
+          ],
+          "texts": [
+            "日期",
+            "2026/10/15",
+            "口",
+            "单MNN"
+          ],
+          "ok": true,
+          "enhance": false,
+          "date_str": "2026-10-15",
+          "confidence": 3,
+          "image_path": "D:\\yw\\gx-ocr\\ocr-page\\data\\ocr_runs\\dual\\20261015_174150_357\\left\\date_crop.jpg",
+          "phase": 0,
+          "stage": "auto_main",
+          "crop_index": 0,
+          "local_index": 0
+        }
+      ],
+      "locate": {
+        "crop": [
+          0.0911,
+          0.2417,
+          0.4113,
+          0.3199
+        ],
+        "search": [
+          0.0,
+          0.06,
+          0.72,
+          0.42
+        ],
+        "label_box": [
+          129.9798371342345,
+          205.71750586255254,
+          168.04536644797238,
+          228.31874511453955
+        ],
+        "image_path": "D:\\yw\\gx-ocr\\ocr-page\\data\\ocr_runs\\dual\\20261015_174150_357\\left\\date_locate.jpg",
+        "method": "label"
+      },
+      "confidence": 3,
+      "image_url": "/data/ocr_runs/dual/20261015_174150_357/left/date_crop.jpg",
+      "best_image_url": "/data/ocr_runs/dual/20261015_174150_357/left/date_crop_best.jpg"
+    },
+    "date_reason_label": "自定位主框认出完整日期",
+    "date_crop_path": "D:\\yw\\gx-ocr\\ocr-page\\data\\ocr_runs\\dual\\20261015_174150_357\\left\\date_crop.jpg",
+    "date_crop_url": "/data/ocr_runs/dual/20261015_174150_357/left/date_crop.jpg",
+    "date_best_path": "D:\\yw\\gx-ocr\\ocr-page\\data\\ocr_runs\\dual\\20261015_174150_357\\left\\date_crop_best.jpg",
+    "date_best_url": "/data/ocr_runs/dual/20261015_174150_357/left/date_crop_best.jpg",
+    "date_stages": [
+      {
+        "key": "locate_main",
+        "title": "1. 自定位 OCR主框",
+        "hint": "定位筛选框 + 送入 OCR 的主裁剪（2 张）",
+        "ok": true,
+        "items": [
+          {
+            "name": "date_locate.jpg",
+            "image_path": "D:\\yw\\gx-ocr\\ocr-page\\data\\ocr_runs\\dual\\20261015_174150_357\\left\\date_locate.jpg",
+            "image_url": "/data/ocr_runs/dual/20261015_174150_357/left/date_locate.jpg",
+            "label": "定位框",
+            "hint": "auto 找到的日期+筛选框",
+            "role": "locate",
+            "stage": "locate_main",
+            "ok": true,
+            "is_best": false,
+            "skipped": "",
+            "date_str": "",
+            "index": 0
+          },
+          {
+            "name": "date_crop.jpg",
+            "image_path": "D:\\yw\\gx-ocr\\ocr-page\\data\\ocr_runs\\dual\\20261015_174150_357\\left\\date_crop.jpg",
+            "image_url": "/data/ocr_runs/dual/20261015_174150_357/left/date_crop.jpg",
+            "label": "OCR 主框",
+            "hint": "自定位主框送入日期 OCR · 本步认出日期",
+            "role": "crop",
+            "stage": "locate_main",
+            "ok": true,
+            "is_best": true,
+            "skipped": "",
+            "date_str": "2026-10-15",
+            "index": 1
+          }
+        ]
+      }
+    ],
+    "date_steps": [
+      {
+        "name": "date_locate.jpg",
+        "image_path": "D:\\yw\\gx-ocr\\ocr-page\\data\\ocr_runs\\dual\\20261015_174150_357\\left\\date_locate.jpg",
+        "image_url": "/data/ocr_runs/dual/20261015_174150_357/left/date_locate.jpg",
+        "label": "定位框",
+        "hint": "auto 找到的日期+筛选框",
+        "role": "locate",
+        "stage": "locate_main",
+        "ok": true,
+        "is_best": false,
+        "skipped": "",
+        "date_str": "",
+        "index": 0
+      },
+      {
+        "name": "date_crop.jpg",
+        "image_path": "D:\\yw\\gx-ocr\\ocr-page\\data\\ocr_runs\\dual\\20261015_174150_357\\left\\date_crop.jpg",
+        "image_url": "/data/ocr_runs/dual/20261015_174150_357/left/date_crop.jpg",
+        "label": "OCR 主框",
+        "hint": "自定位主框送入日期 OCR · 本步认出日期",
+        "role": "crop",
+        "stage": "locate_main",
+        "ok": true,
+        "is_best": true,
+        "skipped": "",
+        "date_str": "2026-10-15",
+        "index": 1
+      }
+    ],
+    "date_candidates": [
+      {
+        "name": "date_locate.jpg",
+        "image_path": "D:\\yw\\gx-ocr\\ocr-page\\data\\ocr_runs\\dual\\20261015_174150_357\\left\\date_locate.jpg",
+        "image_url": "/data/ocr_runs/dual/20261015_174150_357/left/date_locate.jpg",
+        "label": "定位框",
+        "hint": "auto 找到的日期+筛选框",
+        "role": "locate",
+        "stage": "locate_main",
+        "ok": true,
+        "is_best": false,
+        "skipped": "",
+        "date_str": "",
+        "index": 0
+      },
+      {
+        "name": "date_crop.jpg",
+        "image_path": "D:\\yw\\gx-ocr\\ocr-page\\data\\ocr_runs\\dual\\20261015_174150_357\\left\\date_crop.jpg",
+        "image_url": "/data/ocr_runs/dual/20261015_174150_357/left/date_crop.jpg",
+        "label": "OCR 主框",
+        "hint": "自定位主框送入日期 OCR · 本步认出日期",
+        "role": "crop",
+        "stage": "locate_main",
+        "ok": true,
+        "is_best": true,
+        "skipped": "",
+        "date_str": "2026-10-15",
+        "index": 1
+      }
+    ],
+    "point_count": 9,
+    "ocr_filled": 9,
+    "expected_cells": 9,
+    "gap_filled": 0,
+    "gap_fill_map": [
+      [
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        ""
+      ]
+    ],
+    "reason": null,
+    "message": null,
+    "quality": {
+      "ok": true,
+      "point_count": 9,
+      "min_points": 8
+    },
+    "source_path": "D:\\yw\\gx-ocr\\ocr-page\\data\\captures\\20261015\\17-41_left.jpg",
+    "source_url": "/data/captures/20261015/17-41_left.jpg",
+    "image_path": "D:\\yw\\gx-ocr\\ocr-page\\data\\ocr_runs\\dual\\20261015_174150_357\\left.jpg",
+    "image_url": "/data/ocr_runs/dual/20261015_174150_357/left.jpg",
+    "monitor_path": "D:\\yw\\gx-ocr\\ocr-page\\data\\ocr_runs\\dual\\20261015_174150_357\\left.jpg",
+    "monitor_url": "/data/ocr_runs/dual/20261015_174150_357/left.jpg",
+    "artifacts_dir": "D:\\yw\\gx-ocr\\ocr-page\\data\\ocr_runs\\dual\\20261015_174150_357\\left",
+    "artifacts_url": "/data/ocr_runs/dual/20261015_174150_357/left",
+    "best_table_path": "D:\\yw\\gx-ocr\\ocr-page\\data\\ocr_runs\\dual\\20261015_174150_357\\left\\best_table.jpg",
+    "best_table_url": "/data/ocr_runs/dual/20261015_174150_357/left/best_table.jpg",
+    "candidate_urls": [
+      "/data/ocr_runs/dual/20261015_174150_357/left/date_crop.jpg",
+      "/data/ocr_runs/dual/20261015_174150_357/left/date_locate.jpg",
+      "/data/ocr_runs/dual/20261015_174150_357/left/date_crop_best.jpg",
+      "/data/ocr_runs/dual/20261015_174150_357/left/cand_table_auto.jpg",
+      "/data/ocr_runs/dual/20261015_174150_357/left/cand_table_fixed.jpg",
+      "/data/ocr_runs/dual/20261015_174150_357/left/best_table.jpg"
+    ],
+    "candidates": [
+      {
+        "index": 0,
+        "label": "table_auto",
+        "name": "cand_table_auto",
+        "crop": null,
+        "status": "winner",
+        "reason": "综合最优（cand_table_auto）：表头质量=9，实心行=1，密度=109；同分时优先更紧裁剪",
+        "score": [
+          9,
+          1,
+          109,
+          0.3903
+        ],
+        "headers": [
+          "00:15",
+          "00:30",
+          "00:45",
+          "01:00",
+          "01:15",
+          "01:30",
+          "01:45",
+          "02:00",
+          "02:15"
+        ],
+        "rows": [
+          [
+            "116.79",
+            "17.679",
+            "93.582",
+            "116.88",
+            "138.755",
+            "16.085",
+            "112.923",
+            "127.884",
+            "127.997"
+          ]
+        ],
+        "point_count": 9,
+        "gap_filled": 0,
+        "gap_fill_map": [],
+        "image_path": "D:\\yw\\gx-ocr\\ocr-page\\data\\ocr_runs\\dual\\20261015_174150_357\\left\\cand_table_auto.jpg",
+        "image_url": "/data/ocr_runs/dual/20261015_174150_357/left/cand_table_auto.jpg"
+      },
+      {
+        "index": 1,
+        "label": "table_fixed",
+        "name": "cand_table_fixed",
+        "crop": [
+          0.02,
+          0.52,
+          0.97,
+          0.9
+        ],
+        "status": "loser",
+        "reason": "相对胜出者「cand_table_auto」：表头质量较弱（本候选 5 < 胜出 9）",
+        "score": [
+          5,
+          2,
+          105,
+          0.361
+        ],
+        "headers": [
+          "01:15",
+          "01:30",
+          "01:45",
+          "02:00",
+          "02:15"
+        ],
+        "rows": [
+          [
+            "0",
+            "0",
+            "0",
+            "0",
+            "0"
+          ],
+          [
+            "38.755",
+            "51.160",
+            "92.312",
+            "127.884",
+            "127.997"
+          ]
+        ],
+        "point_count": 10,
+        "gap_filled": 0,
+        "gap_fill_map": [],
+        "image_path": "D:\\yw\\gx-ocr\\ocr-page\\data\\ocr_runs\\dual\\20261015_174150_357\\left\\cand_table_fixed.jpg",
+        "image_url": "/data/ocr_runs/dual/20261015_174150_357/left/cand_table_fixed.jpg"
+      }
+    ],
+    "excel_path": "",
+    "excel_url": "",
+    "headers": [
+      "00:15",
+      "00:30",
+      "00:45",
+      "01:00",
+      "01:15",
+      "01:30",
+      "01:45",
+      "02:00",
+      "02:15"
+    ],
+    "rows": [
+      [
+        "116.79",
+        "17.679",
+        "93.582",
+        "116.88",
+        "138.755",
+        "16.085",
+        "112.923",
+        "127.884",
+        "127.997"
+      ]
+    ],
+    "row_tags": [
+      "GX.DEMO.OCR.L_1"
+    ],
+    "points": [
+      {
+        "time_label": "00:15",
+        "value": 116.79,
+        "timestamp": "2026-10-14 00:15:00",
+        "tag": "GX.DEMO.OCR.L_1",
+        "row_index": 0,
+        "side": "left"
+      },
+      {
+        "time_label": "00:30",
+        "value": 17.679,
+        "timestamp": "2026-10-14 00:30:00",
+        "tag": "GX.DEMO.OCR.L_1",
+        "row_index": 0,
+        "side": "left"
+      },
+      {
+        "time_label": "00:45",
+        "value": 93.582,
+        "timestamp": "2026-10-14 00:45:00",
+        "tag": "GX.DEMO.OCR.L_1",
+        "row_index": 0,
+        "side": "left"
+      },
+      {
+        "time_label": "01:00",
+        "value": 116.88,
+        "timestamp": "2026-10-14 01:00:00",
+        "tag": "GX.DEMO.OCR.L_1",
+        "row_index": 0,
+        "side": "left"
+      },
+      {
+        "time_label": "01:15",
+        "value": 138.755,
+        "timestamp": "2026-10-14 01:15:00",
+        "tag": "GX.DEMO.OCR.L_1",
+        "row_index": 0,
+        "side": "left"
+      },
+      {
+        "time_label": "01:30",
+        "value": 16.085,
+        "timestamp": "2026-10-14 01:30:00",
+        "tag": "GX.DEMO.OCR.L_1",
+        "row_index": 0,
+        "side": "left"
+      },
+      {
+        "time_label": "01:45",
+        "value": 112.923,
+        "timestamp": "2026-10-14 01:45:00",
+        "tag": "GX.DEMO.OCR.L_1",
+        "row_index": 0,
+        "side": "left"
+      },
+      {
+        "time_label": "02:00",
+        "value": 127.884,
+        "timestamp": "2026-10-14 02:00:00",
+        "tag": "GX.DEMO.OCR.L_1",
+        "row_index": 0,
+        "side": "left"
+      },
+      {
+        "time_label": "02:15",
+        "value": 127.997,
+        "timestamp": "2026-10-14 02:15:00",
+        "tag": "GX.DEMO.OCR.L_1",
+        "row_index": 0,
+        "side": "left"
+      }
+    ],
+    "ocr_ms": 216698
+  },
+  "right": {
+    "ok": true,
+    "id": "right",
+    "title": "right",
+    "tag": "GX.DEMO.OCR.R",
+    "host": "192.168.16.64",
+    "type": "isapi",
+    "base_date": "2026-10-15",
+    "date_source": "ocr",
+    "date_ocr": {
+      "ok": true,
+      "date_str": "2026-10-15",
+      "raw_texts": [
+        "日期",
+        "2026/10/15",
+        "口"
+      ],
+      "crop": [
+        0.2393,
+        0.157,
+        0.5521,
+        0.2071
+      ],
+      "image_path": "D:\\yw\\gx-ocr\\ocr-page\\data\\ocr_runs\\dual\\20261015_174150_357\\right\\date_crop.jpg",
+      "best_image_path": "D:\\yw\\gx-ocr\\ocr-page\\data\\ocr_runs\\dual\\20261015_174150_357\\right\\date_crop_best.jpg",
+      "candidate_image_paths": [
+        "D:\\yw\\gx-ocr\\ocr-page\\data\\ocr_runs\\dual\\20261015_174150_357\\right\\date_locate.jpg",
+        "D:\\yw\\gx-ocr\\ocr-page\\data\\ocr_runs\\dual\\20261015_174150_357\\right\\date_crop.jpg"
+      ],
+      "reason": "full_ymd_auto_locate#0",
+      "attempts": [
+        {
+          "crop": [
+            0.2393,
+            0.157,
+            0.5521,
+            0.2071
+          ],
+          "texts": [
+            "日期",
+            "2026/10/15",
+            "口"
+          ],
+          "ok": true,
+          "enhance": false,
+          "date_str": "2026-10-15",
+          "confidence": 3,
+          "image_path": "D:\\yw\\gx-ocr\\ocr-page\\data\\ocr_runs\\dual\\20261015_174150_357\\right\\date_crop.jpg",
+          "phase": 0,
+          "stage": "auto_main",
+          "crop_index": 0,
+          "local_index": 0
+        }
+      ],
+      "locate": {
+        "crop": [
+          0.2393,
+          0.157,
+          0.5521,
+          0.2071
+        ],
+        "search": [
+          0.0,
+          0.06,
+          0.72,
+          0.42
+        ],
+        "label_box": [
+          634.4601531028748,
+          210.30434039787008,
+          696.6985650857289,
+          240.3478175975658
+        ],
+        "image_path": "D:\\yw\\gx-ocr\\ocr-page\\data\\ocr_runs\\dual\\20261015_174150_357\\right\\date_locate.jpg",
+        "method": "label"
+      },
+      "confidence": 3,
+      "image_url": "/data/ocr_runs/dual/20261015_174150_357/right/date_crop.jpg",
+      "best_image_url": "/data/ocr_runs/dual/20261015_174150_357/right/date_crop_best.jpg"
+    },
+    "date_reason_label": "自定位主框认出完整日期",
+    "date_crop_path": "D:\\yw\\gx-ocr\\ocr-page\\data\\ocr_runs\\dual\\20261015_174150_357\\right\\date_crop.jpg",
+    "date_crop_url": "/data/ocr_runs/dual/20261015_174150_357/right/date_crop.jpg",
+    "date_best_path": "D:\\yw\\gx-ocr\\ocr-page\\data\\ocr_runs\\dual\\20261015_174150_357\\right\\date_crop_best.jpg",
+    "date_best_url": "/data/ocr_runs/dual/20261015_174150_357/right/date_crop_best.jpg",
+    "date_stages": [
+      {
+        "key": "locate_main",
+        "title": "1. 自定位 OCR主框",
+        "hint": "定位筛选框 + 送入 OCR 的主裁剪（2 张）",
+        "ok": true,
+        "items": [
+          {
+            "name": "date_locate.jpg",
+            "image_path": "D:\\yw\\gx-ocr\\ocr-page\\data\\ocr_runs\\dual\\20261015_174150_357\\right\\date_locate.jpg",
+            "image_url": "/data/ocr_runs/dual/20261015_174150_357/right/date_locate.jpg",
+            "label": "定位框",
+            "hint": "auto 找到的日期+筛选框",
+            "role": "locate",
+            "stage": "locate_main",
+            "ok": true,
+            "is_best": false,
+            "skipped": "",
+            "date_str": "",
+            "index": 0
+          },
+          {
+            "name": "date_crop.jpg",
+            "image_path": "D:\\yw\\gx-ocr\\ocr-page\\data\\ocr_runs\\dual\\20261015_174150_357\\right\\date_crop.jpg",
+            "image_url": "/data/ocr_runs/dual/20261015_174150_357/right/date_crop.jpg",
+            "label": "OCR 主框",
+            "hint": "自定位主框送入日期 OCR · 本步认出日期",
+            "role": "crop",
+            "stage": "locate_main",
+            "ok": true,
+            "is_best": true,
+            "skipped": "",
+            "date_str": "2026-10-15",
+            "index": 1
+          }
+        ]
+      }
+    ],
+    "date_steps": [
+      {
+        "name": "date_locate.jpg",
+        "image_path": "D:\\yw\\gx-ocr\\ocr-page\\data\\ocr_runs\\dual\\20261015_174150_357\\right\\date_locate.jpg",
+        "image_url": "/data/ocr_runs/dual/20261015_174150_357/right/date_locate.jpg",
+        "label": "定位框",
+        "hint": "auto 找到的日期+筛选框",
+        "role": "locate",
+        "stage": "locate_main",
+        "ok": true,
+        "is_best": false,
+        "skipped": "",
+        "date_str": "",
+        "index": 0
+      },
+      {
+        "name": "date_crop.jpg",
+        "image_path": "D:\\yw\\gx-ocr\\ocr-page\\data\\ocr_runs\\dual\\20261015_174150_357\\right\\date_crop.jpg",
+        "image_url": "/data/ocr_runs/dual/20261015_174150_357/right/date_crop.jpg",
+        "label": "OCR 主框",
+        "hint": "自定位主框送入日期 OCR · 本步认出日期",
+        "role": "crop",
+        "stage": "locate_main",
+        "ok": true,
+        "is_best": true,
+        "skipped": "",
+        "date_str": "2026-10-15",
+        "index": 1
+      }
+    ],
+    "date_candidates": [
+      {
+        "name": "date_locate.jpg",
+        "image_path": "D:\\yw\\gx-ocr\\ocr-page\\data\\ocr_runs\\dual\\20261015_174150_357\\right\\date_locate.jpg",
+        "image_url": "/data/ocr_runs/dual/20261015_174150_357/right/date_locate.jpg",
+        "label": "定位框",
+        "hint": "auto 找到的日期+筛选框",
+        "role": "locate",
+        "stage": "locate_main",
+        "ok": true,
+        "is_best": false,
+        "skipped": "",
+        "date_str": "",
+        "index": 0
+      },
+      {
+        "name": "date_crop.jpg",
+        "image_path": "D:\\yw\\gx-ocr\\ocr-page\\data\\ocr_runs\\dual\\20261015_174150_357\\right\\date_crop.jpg",
+        "image_url": "/data/ocr_runs/dual/20261015_174150_357/right/date_crop.jpg",
+        "label": "OCR 主框",
+        "hint": "自定位主框送入日期 OCR · 本步认出日期",
+        "role": "crop",
+        "stage": "locate_main",
+        "ok": true,
+        "is_best": true,
+        "skipped": "",
+        "date_str": "2026-10-15",
+        "index": 1
+      }
+    ],
+    "point_count": 20,
+    "ocr_filled": 20,
+    "expected_cells": 20,
+    "gap_filled": 0,
+    "gap_fill_map": [
+      [
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        ""
+      ],
+      [
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        ""
+      ]
+    ],
+    "reason": null,
+    "message": null,
+    "quality": {
+      "ok": true,
+      "point_count": 20,
+      "min_points": 8
+    },
+    "source_path": "D:\\yw\\gx-ocr\\ocr-page\\data\\captures\\20261015\\17-41_right.jpg",
+    "source_url": "/data/captures/20261015/17-41_right.jpg",
+    "image_path": "D:\\yw\\gx-ocr\\ocr-page\\data\\ocr_runs\\dual\\20261015_174150_357\\right.jpg",
+    "image_url": "/data/ocr_runs/dual/20261015_174150_357/right.jpg",
+    "monitor_path": "D:\\yw\\gx-ocr\\ocr-page\\data\\ocr_runs\\dual\\20261015_174150_357\\right.jpg",
+    "monitor_url": "/data/ocr_runs/dual/20261015_174150_357/right.jpg",
+    "artifacts_dir": "D:\\yw\\gx-ocr\\ocr-page\\data\\ocr_runs\\dual\\20261015_174150_357\\right",
+    "artifacts_url": "/data/ocr_runs/dual/20261015_174150_357/right",
+    "best_table_path": "D:\\yw\\gx-ocr\\ocr-page\\data\\ocr_runs\\dual\\20261015_174150_357\\right\\best_table.jpg",
+    "best_table_url": "/data/ocr_runs/dual/20261015_174150_357/right/best_table.jpg",
+    "candidate_urls": [
+      "/data/ocr_runs/dual/20261015_174150_357/right/date_crop.jpg",
+      "/data/ocr_runs/dual/20261015_174150_357/right/date_locate.jpg",
+      "/data/ocr_runs/dual/20261015_174150_357/right/date_crop_best.jpg",
+      "/data/ocr_runs/dual/20261015_174150_357/right/cand_table_auto.jpg",
+      "/data/ocr_runs/dual/20261015_174150_357/right/cand_table_fixed.jpg",
+      "/data/ocr_runs/dual/20261015_174150_357/right/best_table.jpg"
+    ],
+    "candidates": [
+      {
+        "index": 0,
+        "label": "table_auto",
+        "name": "cand_table_auto",
+        "crop": null,
+        "status": "loser",
+        "reason": "相对胜出者「cand_table_fixed」：表头质量较弱（本候选 9 < 胜出 10）",
+        "score": [
+          9,
+          1,
+          96,
+          0.271
+        ],
+        "headers": [
+          "00:15",
+          "00:30",
+          "00:45",
+          "01:00",
+          "01:15",
+          "01:30",
+          "01:45",
+          "02:00",
+          "02:15"
+        ],
+        "rows": [
+          [
+            "116.79",
+            "116.79",
+            "93.582",
+            "116.88",
+            "138.755",
+            "116.035",
+            "",
+            "125.584",
+            "125.997"
+          ]
+        ],
+        "point_count": 8,
+        "gap_filled": 0,
+        "gap_fill_map": [],
+        "image_path": "D:\\yw\\gx-ocr\\ocr-page\\data\\ocr_runs\\dual\\20261015_174150_357\\right\\cand_table_auto.jpg",
+        "image_url": "/data/ocr_runs/dual/20261015_174150_357/right/cand_table_auto.jpg"
+      },
+      {
+        "index": 1,
+        "label": "table_fixed",
+        "name": "cand_table_fixed",
+        "crop": [
+          0.03,
+          0.52,
+          1.0,
+          0.9
+        ],
+        "status": "winner",
+        "reason": "综合最优（cand_table_fixed）：表头质量=10，实心行=2，密度=109；同分时优先更紧裁剪",
+        "score": [
+          10,
+          2,
+          109,
+          0.3686
+        ],
+        "headers": [
+          "00:15",
+          "00:30",
+          "00:45",
+          "01:00",
+          "01:15",
+          "01:30",
+          "01:45",
+          "02:00",
+          "02:15",
+          "02:30"
+        ],
+        "rows": [
+          [
+            "0",
+            "0",
+            "0",
+            "0",
+            "0",
+            "0",
+            "0",
+            "0",
+            "0",
+            "0"
+          ],
+          [
+            "116.79",
+            "116.79",
+            "93.582",
+            "116.88",
+            "138.755",
+            "116.055",
+            "112",
+            "25.664",
+            "125.997",
+            "105.791"
+          ]
+        ],
+        "point_count": 20,
+        "gap_filled": 0,
+        "gap_fill_map": [],
+        "image_path": "D:\\yw\\gx-ocr\\ocr-page\\data\\ocr_runs\\dual\\20261015_174150_357\\right\\cand_table_fixed.jpg",
+        "image_url": "/data/ocr_runs/dual/20261015_174150_357/right/cand_table_fixed.jpg"
+      }
+    ],
+    "excel_path": "",
+    "excel_url": "",
+    "headers": [
+      "00:15",
+      "00:30",
+      "00:45",
+      "01:00",
+      "01:15",
+      "01:30",
+      "01:45",
+      "02:00",
+      "02:15",
+      "02:30"
+    ],
+    "rows": [
+      [
+        "0",
+        "0",
+        "0",
+        "0",
+        "0",
+        "0",
+        "0",
+        "0",
+        "0",
+        "0"
+      ],
+      [
+        "116.79",
+        "116.79",
+        "93.582",
+        "116.88",
+        "138.755",
+        "116.055",
+        "112",
+        "25.664",
+        "125.997",
+        "105.791"
+      ]
+    ],
+    "row_tags": [
+      "GX.DEMO.OCR.R_1",
+      "GX.DEMO.OCR.R_2"
+    ],
+    "points": [
+      {
+        "time_label": "00:15",
+        "value": 0.0,
+        "timestamp": "2026-10-14 00:15:00",
+        "tag": "GX.DEMO.OCR.R_1",
+        "row_index": 0,
+        "side": "right"
+      },
+      {
+        "time_label": "00:30",
+        "value": 0.0,
+        "timestamp": "2026-10-14 00:30:00",
+        "tag": "GX.DEMO.OCR.R_1",
+        "row_index": 0,
+        "side": "right"
+      },
+      {
+        "time_label": "00:45",
+        "value": 0.0,
+        "timestamp": "2026-10-14 00:45:00",
+        "tag": "GX.DEMO.OCR.R_1",
+        "row_index": 0,
+        "side": "right"
+      },
+      {
+        "time_label": "01:00",
+        "value": 0.0,
+        "timestamp": "2026-10-14 01:00:00",
+        "tag": "GX.DEMO.OCR.R_1",
+        "row_index": 0,
+        "side": "right"
+      },
+      {
+        "time_label": "01:15",
+        "value": 0.0,
+        "timestamp": "2026-10-14 01:15:00",
+        "tag": "GX.DEMO.OCR.R_1",
+        "row_index": 0,
+        "side": "right"
+      },
+      {
+        "time_label": "01:30",
+        "value": 0.0,
+        "timestamp": "2026-10-14 01:30:00",
+        "tag": "GX.DEMO.OCR.R_1",
+        "row_index": 0,
+        "side": "right"
+      },
+      {
+        "time_label": "01:45",
+        "value": 0.0,
+        "timestamp": "2026-10-14 01:45:00",
+        "tag": "GX.DEMO.OCR.R_1",
+        "row_index": 0,
+        "side": "right"
+      },
+      {
+        "time_label": "02:00",
+        "value": 0.0,
+        "timestamp": "2026-10-14 02:00:00",
+        "tag": "GX.DEMO.OCR.R_1",
+        "row_index": 0,
+        "side": "right"
+      },
+      {
+        "time_label": "02:15",
+        "value": 0.0,
+        "timestamp": "2026-10-14 02:15:00",
+        "tag": "GX.DEMO.OCR.R_1",
+        "row_index": 0,
+        "side": "right"
+      },
+      {
+        "time_label": "02:30",
+        "value": 0.0,
+        "timestamp": "2026-10-14 02:30:00",
+        "tag": "GX.DEMO.OCR.R_1",
+        "row_index": 0,
+        "side": "right"
+      },
+      {
+        "time_label": "00:15",
+        "value": 116.79,
+        "timestamp": "2026-10-14 00:15:00",
+        "tag": "GX.DEMO.OCR.R_2",
+        "row_index": 1,
+        "side": "right"
+      },
+      {
+        "time_label": "00:30",
+        "value": 116.79,
+        "timestamp": "2026-10-14 00:30:00",
+        "tag": "GX.DEMO.OCR.R_2",
+        "row_index": 1,
+        "side": "right"
+      },
+      {
+        "time_label": "00:45",
+        "value": 93.582,
+        "timestamp": "2026-10-14 00:45:00",
+        "tag": "GX.DEMO.OCR.R_2",
+        "row_index": 1,
+        "side": "right"
+      },
+      {
+        "time_label": "01:00",
+        "value": 116.88,
+        "timestamp": "2026-10-14 01:00:00",
+        "tag": "GX.DEMO.OCR.R_2",
+        "row_index": 1,
+        "side": "right"
+      },
+      {
+        "time_label": "01:15",
+        "value": 138.755,
+        "timestamp": "2026-10-14 01:15:00",
+        "tag": "GX.DEMO.OCR.R_2",
+        "row_index": 1,
+        "side": "right"
+      },
+      {
+        "time_label": "01:30",
+        "value": 116.055,
+        "timestamp": "2026-10-14 01:30:00",
+        "tag": "GX.DEMO.OCR.R_2",
+        "row_index": 1,
+        "side": "right"
+      },
+      {
+        "time_label": "01:45",
+        "value": 112.0,
+        "timestamp": "2026-10-14 01:45:00",
+        "tag": "GX.DEMO.OCR.R_2",
+        "row_index": 1,
+        "side": "right"
+      },
+      {
+        "time_label": "02:00",
+        "value": 25.664,
+        "timestamp": "2026-10-14 02:00:00",
+        "tag": "GX.DEMO.OCR.R_2",
+        "row_index": 1,
+        "side": "right"
+      },
+      {
+        "time_label": "02:15",
+        "value": 125.997,
+        "timestamp": "2026-10-14 02:15:00",
+        "tag": "GX.DEMO.OCR.R_2",
+        "row_index": 1,
+        "side": "right"
+      },
+      {
+        "time_label": "02:30",
+        "value": 105.791,
+        "timestamp": "2026-10-14 02:30:00",
+        "tag": "GX.DEMO.OCR.R_2",
+        "row_index": 1,
+        "side": "right"
+      }
+    ],
+    "ocr_ms": 326113
+  },
+  "capture_mode": "double_camera",
+  "left_capture_path": "D:\\yw\\gx-ocr\\ocr-page\\data\\captures\\20261015\\17-41_left.jpg",
+  "right_capture_path": "D:\\yw\\gx-ocr\\ocr-page\\data\\captures\\20261015\\17-41_right.jpg",
+  "left_capture_url": "/data/captures/20261015/17-41_left.jpg",
+  "right_capture_url": "/data/captures/20261015/17-41_right.jpg",
+  "point_count_left": 9,
+  "point_count_right": 20,
+  "ocr_filled_left": 9,
+  "ocr_filled_right": 20,
+  "ocr_filled": 29,
+  "expected_cells_left": 9,
+  "expected_cells_right": 20,
+  "expected_cells": 29
+}

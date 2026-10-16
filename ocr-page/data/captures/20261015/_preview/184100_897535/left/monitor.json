@@ -1,0 +1,84 @@
+{
+  "ok": true,
+  "crop": [
+    0.0,
+    0.1631,
+    0.8475,
+    1.0
+  ],
+  "mode": "structure",
+  "ms": 730,
+  "detail": {
+    "probe_wh": [
+      800,
+      640
+    ],
+    "src_wh": [
+      1280,
+      1024
+    ],
+    "structure_raw": [
+      0.0,
+      0.178125,
+      0.8125,
+      1.0
+    ],
+    "energy_raw": null,
+    "bright_raw": [
+      0.08125,
+      0.2140625,
+      0.79625,
+      1.0
+    ],
+    "structure": [
+      0.0,
+      0.178125,
+      0.8125,
+      1.0
+    ],
+    "energy": null,
+    "bright": [
+      0.08,
+      0.2140625,
+      0.92,
+      1.0
+    ],
+    "width_policy": {
+      "structure": "side_trim",
+      "energy": "none",
+      "bright": "soft_trim"
+    },
+    "x_envelope": [
+      0.0,
+      0.8475
+    ],
+    "chosen_score": 0.3456,
+    "chosen_policy": "side_trim",
+    "near_prefer_wider": false,
+    "candidates": [
+      {
+        "mode": "structure",
+        "crop": [
+          0.0,
+          0.16312500000000002,
+          0.8475,
+          1.0
+        ],
+        "score": 0.3456,
+        "policy": "side_trim"
+      },
+      {
+        "mode": "bright",
+        "crop": [
+          0.045,
+          0.19906249999999998,
+          0.9550000000000001,
+          1.0
+        ],
+        "score": 0.2394,
+        "policy": "soft_trim"
+      }
+    ]
+  },
+  "enabled": true
+}

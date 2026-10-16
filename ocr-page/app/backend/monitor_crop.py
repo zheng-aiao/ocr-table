@@ -152,7 +152,7 @@ def detect_monitor_region(
             out["detail"] = detail
             out["mode"] = "fallback"
             out["ms"] = int((time.perf_counter() - t0) * 1000)
-            logger.info("显示器区域未命中，回退整图")
+            logger.debug("显示器区域未命中，回退整图")
             return out
 
         # 高分优先；近分时优先更宽框（防 bright 以 0.00x 分差啃掉屏右缘）
@@ -196,7 +196,7 @@ def detect_monitor_region(
             out["mode"] = "full"
             out["detail"] = detail
             out["ms"] = int((time.perf_counter() - t0) * 1000)
-            logger.info("显示器区域已近满屏，跳过裁剪 ms=%s", out["ms"])
+            logger.debug("显示器区域已近满屏，跳过裁剪 ms=%s", out["ms"])
             return out
 
         out["ok"] = True
@@ -204,7 +204,7 @@ def detect_monitor_region(
         out["mode"] = mode
         out["detail"] = detail
         out["ms"] = int((time.perf_counter() - t0) * 1000)
-        logger.info(
+        logger.debug(
             "显示器区域 ok=1 mode=%s policy=%s crop=%s ms=%s",
             mode,
             policy,
@@ -288,7 +288,7 @@ def prepare_monitor_work_image(
                 apply_monitor_crop(src, mon_out, m_box)
                 work = mon_out
                 mon_str = str(mon_out)
-                logger.info(
+                logger.debug(
                     "显示器裁剪 mode=%s crop=%s → %s",
                     meta.get("mode"),
                     m_box,

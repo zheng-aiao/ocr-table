@@ -3,236 +3,537 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>现货曲线 Demo · 三指标</title>
+  <title>现货生产信息申报系统</title>
   <script src="https://cdn.jsdelivr.net/npm/echarts@5.5.0/dist/echarts.min.js"></script>
   <style>
     :root {
-      --bg: #eef3f8;
-      --panel: #ffffff;
-      --text: #1f2a37;
+      --header: #1a4d2e;
+      --header-dark: #143d24;
+      --sidebar: #2a2a2a;
+      --sidebar-active: #1a4d2e;
+      --title: #1f3d2a;
+      --text: #334155;
       --muted: #6b7c93;
-      --line: #d7e0ea;
+      --line: #d5dde6;
+      --page-bg: #f0f2f5;
       --accent: #2f6fed;
       --ok: #1a7f4b;
       --err: #c62828;
-      /* 表头近白浅灰、数据行更浅的蓝 */
+      /* 表头近白浅灰，数据行浅蓝（与原图一致，两者颜色不同） */
       --table-header: #f2f3f5;
       --table-row: #d6e6f2;
       --table-border: #c5ced9;
+      --sidebar-w: 210px;
+      --header-h: 48px;
     }
     * { box-sizing: border-box; }
-    body {
+    html, body {
       margin: 0;
-      font-family: "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
-      background: linear-gradient(180deg, #f5f8fc 0%, var(--bg) 40%);
+      height: 100%;
+      font-family: "Microsoft YaHei", "PingFang SC", "Segoe UI", sans-serif;
+      background: #1c1f23;
       color: var(--text);
-      min-height: 100vh;
+      overflow: hidden;
     }
-    header {
-      display: flex;
-      flex-wrap: wrap;
-      align-items: flex-end;
-      justify-content: space-between;
-      gap: 12px;
-      padding: 20px 28px 12px;
-    }
-    header h1 {
-      margin: 0;
-      font-size: 1.35rem;
-      font-weight: 700;
-    }
-    header p {
-      margin: 6px 0 0;
-      color: var(--muted);
-      font-size: 0.9rem;
-    }
-    .toolbar {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 8px;
-      align-items: center;
-    }
-    .toolbar label {
-      font-size: 0.82rem;
-      color: var(--muted);
-      margin-right: 4px;
-    }
-    .toolbar input[type="date"] {
-      padding: 8px 10px;
-      border: 1px solid var(--line);
-      border-radius: 8px;
-      background: #fff;
-    }
-    button {
-      border: 0;
-      border-radius: 8px;
-      padding: 9px 14px;
-      background: var(--accent);
-      color: #fff;
-      font-weight: 600;
-      cursor: pointer;
-    }
-    button.secondary {
-      background: #fff;
-      color: var(--text);
-      border: 1px solid var(--line);
-    }
-    button:disabled { opacity: 0.55; cursor: not-allowed; }
-    a.link {
-      color: var(--accent);
-      text-decoration: none;
-      font-size: 0.9rem;
-      font-weight: 600;
-    }
-    main {
-      padding: 0 28px 28px;
+
+    /* 现场壳：顶栏 + 侧栏 + 内容 */
+    .shell {
+      height: 100%;
       display: flex;
       flex-direction: column;
+      background: #fff;
+      overflow: hidden;
+    }
+
+    .sys-bar {
+      height: var(--header-h);
+      flex-shrink: 0;
+      background: var(--header);
+      color: #fff;
+      display: grid;
+      grid-template-columns: 1fr auto 1fr;
+      align-items: center;
+      padding: 0 16px;
+      z-index: 20;
+    }
+    .sys-bar .left {
+      font-size: 13px;
+      font-weight: 500;
+      opacity: 0.95;
+      justify-self: start;
+    }
+    .sys-bar .center {
+      font-size: 20px;
+      font-weight: 650;
+      letter-spacing: 0.06em;
+      white-space: nowrap;
+    }
+    .sys-bar .right {
+      justify-self: end;
+      display: flex;
+      align-items: center;
       gap: 14px;
+      font-size: 13px;
+      font-weight: 500;
     }
-    .panel {
-      background: var(--panel);
-      border: 1px solid var(--line);
-      border-radius: 12px;
-      box-shadow: 0 8px 24px rgba(31, 42, 55, 0.04);
-      padding: 14px 16px 16px;
+    .sys-ico {
+      position: relative;
+      width: 28px;
+      height: 28px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      border-radius: 50%;
+      background: rgba(255,255,255,0.12);
+      cursor: default;
     }
-    .panel-title {
-      margin: 0 0 10px;
-      font-size: 0.95rem;
+    .sys-ico svg { width: 16px; height: 16px; fill: #fff; }
+    .sys-badge {
+      position: absolute;
+      top: -4px;
+      right: -6px;
+      min-width: 16px;
+      height: 14px;
+      padding: 0 3px;
+      border-radius: 7px;
+      background: #e53935;
+      color: #fff;
+      font-size: 10px;
+      line-height: 14px;
+      text-align: center;
       font-weight: 700;
     }
-    .meta {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 16px;
-      color: var(--muted);
-      font-size: 0.85rem;
-      margin-bottom: 8px;
+    .sys-user {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      opacity: 0.95;
     }
-    #chart {
+    .sys-user .avatar {
+      width: 24px;
+      height: 24px;
+      border-radius: 50%;
+      background: rgba(255,255,255,0.22);
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .sys-user .avatar svg { width: 14px; height: 14px; fill: #fff; }
+    .sys-btn {
+      border: 0;
+      border-radius: 3px;
+      padding: 5px 12px;
+      font-size: 12px;
+      font-weight: 600;
+      color: #fff;
+      cursor: pointer;
+      font-family: inherit;
+    }
+    .sys-btn.red { background: #c62828; cursor: default; }
+    .sys-btn.orange { background: #ef6c00; cursor: default; }
+    .sys-btn.swap { background: #1565c0; }
+    .sys-btn.swap:hover { background: #1976d2; }
+
+    .body-row {
+      flex: 1;
+      min-height: 0;
+      display: flex;
+      overflow: hidden;
+    }
+
+    /* 左侧导航：固定展示，不随内容区滚动消失 */
+    .sidebar {
+      position: sticky;
+      top: 0;
+      align-self: stretch;
+      width: var(--sidebar-w);
+      flex-shrink: 0;
+      background: var(--sidebar);
+      color: #c8c8c8;
+      overflow-y: auto;
+      overflow-x: hidden;
+      border-right: 1px solid #1a1a1a;
+      z-index: 10;
+    }
+    .nav-list {
+      list-style: none;
+      margin: 0;
+      padding: 10px 0 16px;
+    }
+    .nav-item {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 10px 14px;
+      font-size: 13px;
+      line-height: 1.3;
+      cursor: default;
+      user-select: none;
+      border-left: 3px solid transparent;
+      color: #c8c8c8;
+    }
+    .nav-item .ico {
+      width: 16px;
+      height: 16px;
+      flex-shrink: 0;
+      opacity: 0.85;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .nav-item .ico svg { width: 14px; height: 14px; fill: currentColor; }
+    .nav-item .arrow {
+      margin-left: auto;
+      font-size: 10px;
+      opacity: 0.55;
+    }
+    .nav-item.parent { color: #ddd; }
+    .nav-item.child {
+      padding-left: 38px;
+      font-size: 12px;
+      color: #b0b0b0;
+    }
+    .nav-item.active {
+      background: var(--sidebar-active);
+      color: #fff;
+      border-left-color: #7dcea0;
+      font-weight: 600;
+    }
+    .nav-item.active .arrow { opacity: 0.9; }
+
+    /* 外侧灰底；标题/日期/图/表都在同一白色内容盒内 */
+    .page {
+      flex: 1;
+      min-width: 0;
+      min-height: 0;
+      background: var(--page-bg);
+      display: flex;
+      flex-direction: column;
+      padding: 0;
+      overflow: hidden;
+    }
+    .content-panel {
+      flex: 1;
+      min-width: 0; /* 允许随窗口变窄，不被宽表格撑死 */
+      min-height: 0;
       width: 100%;
-      height: 340px;
+      display: flex;
+      flex-direction: column;
+      background: #fff;
+      /* 上边距略大，四周有边距；底部多留一点 */
+      margin: 22px 14px 16px;
+      overflow-x: auto;
+      overflow-y: hidden;
+      box-sizing: border-box;
+    }
+
+    /* 日期 + 折线图：固定宽度（贴原图；半屏时展示不全） */
+    .upper-panel {
+      /* 略增高，消化日期与图之间的空隙，图表高度基本不变，表格整体下移 */
+      flex: 0 0 54%;
+      width: 980px;
+      min-width: 980px;
+      max-width: none;
+      min-height: 0;
+      display: flex;
+      flex-direction: column;
+      align-self: flex-start;
+      flex-shrink: 0;
+      margin: 0;
+      padding: 14px 8px 0 16px;
+      box-sizing: border-box;
+    }
+    .page-head {
+      flex: 0 0 auto;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      align-items: flex-start;
+      gap: 10px;
+      /* 加大日期筛选与折线图的空隙 */
+      padding: 0 0 28px;
+    }
+    .page-title {
+      margin: 0;
+      font-size: 16px;
+      font-weight: 700;
+      color: var(--title);
+      letter-spacing: 0.02em;
+    }
+    /* 日期筛选：标签 + 左图标分隔 + 宽输入框（贴原图） */
+    .date-row {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin-left: 56px;
+    }
+    .date-row label {
+      font-size: 14px;
+      font-weight: 600;
+      color: #333;
+      white-space: nowrap;
+    }
+    .date-field {
+      position: relative;
+      display: inline-flex;
+      align-items: stretch;
+      height: 30px;
+      min-width: 220px;
+      border: 1px solid #d0d4db;
+      background: #fff;
+      padding: 0;
+      box-sizing: border-box;
+    }
+    .date-ico {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 34px;
+      flex-shrink: 0;
+      border-right: 1px solid #d0d4db;
+      background: #fff;
+    }
+    .date-ico svg {
+      width: 15px;
+      height: 15px;
+      fill: #555;
+    }
+    /* 固定显示 yyyy-MM-dd（如 2026-10-16），不走浏览器本地化格式 */
+    .date-text {
+      flex: 1;
+      min-width: 0;
+      display: flex;
+      align-items: center;
+      padding: 0 12px;
+      font-size: 13px;
+      color: #333;
+      font-family: "Microsoft YaHei", "PingFang SC", "Segoe UI", sans-serif;
+      letter-spacing: 0.02em;
+      font-variant-numeric: lining-nums;
+      user-select: none;
+    }
+    .date-field input[type="date"] {
+      position: absolute;
+      left: 0;
+      top: 0;
+      width: 100%;
+      height: 100%;
+      margin: 0;
+      padding: 0;
+      border: 0;
+      opacity: 0;
+      cursor: pointer;
+      z-index: 2;
+    }
+    .date-field input[type="date"]::-webkit-calendar-picker-indicator {
+      position: absolute;
+      left: 0;
+      top: 0;
+      width: 100%;
+      height: 100%;
+      margin: 0;
+      padding: 0;
+      opacity: 0;
+      cursor: pointer;
+    }
+
+    .chart-card {
+      flex: 1 1 auto;
+      min-width: 0;
+      min-height: 120px;
+      width: 100%;
+      background: #fff;
+      border: 0;
+      padding: 0;
+      box-sizing: border-box;
+      overflow: hidden;
+    }
+    .chart {
+      width: 100%;
+      height: 100%;
+      min-width: 0;
+    }
+
+    /* 白底内图与表之间拉大间距 */
+    .page-gap {
+      flex: 0 0 12%;
+      min-height: 36px;
+      background: #fff;
+    }
+
+    /* 表格区：高度缩小，底部再留间隙；横向滚动不撑开父级 */
+    .table-zone {
+      flex: 0 0 28%;
+      min-width: 0;
+      min-height: 0;
+      max-height: 280px;
+      width: 100%;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+      margin: 0 0 14px;
+      padding: 0 12px 0;
+      box-sizing: border-box;
+      background: #fff;
+    }
+    .table-card {
+      flex: 1 1 auto;
+      min-width: 0;
+      min-height: 0;
+      background: #fff;
+      border: 1px solid var(--line);
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
     }
     .table-wrap {
-      overflow: auto;
-      max-height: 360px;
-      border: 1px solid var(--table-border);
-      border-radius: 8px;
-      -webkit-overflow-scrolling: touch;
+      flex: 1 1 auto;
+      min-width: 0;
+      min-height: 0;
+      overflow-x: auto;
+      overflow-y: hidden;
+      background: #fff;
     }
     table {
       border-collapse: collapse;
-      width: max-content;
-      min-width: 100%;
-      font-size: 12px;
+      table-layout: fixed;
+      font-size: 11px;
+      height: auto;
+      /* width 由 JS 按列数写入，保证时刻列不被内容撑开 */
     }
+    table col.col-type { width: 140px; }
+    table col.col-time { width: 76px; }
     th, td {
       border: 1px solid var(--table-border);
-      padding: 8px 10px;
+      padding: 8px 6px;
       white-space: nowrap;
       text-align: center;
       vertical-align: middle;
-      color: var(--text);
-    }
-    th:first-child, td:first-child {
-      position: sticky;
-      left: 0;
-      z-index: 1;
-      font-weight: 650;
+      overflow: hidden;
+      text-overflow: clip;
+      box-sizing: border-box;
     }
     thead th {
-      position: sticky;
-      top: 0;
       background: var(--table-header);
-      z-index: 2;
       font-weight: 600;
-      color: var(--text);
-    }
-    thead th:first-child {
-      z-index: 3;
-      background: var(--table-header);
-    }
-    tbody td {
-      background: var(--table-row);
-    }
-    tbody td:first-child {
-      background: var(--table-row);
-    }
-    .status {
-      min-height: 1.2em;
-      font-size: 0.85rem;
-      color: var(--muted);
-    }
-    .status.ok { color: var(--ok); }
-    .status.err { color: var(--err); }
-    pre {
-      margin: 0;
-      max-height: 420px;
-      overflow: auto;
+      color: #3a4658;
       font-size: 12px;
-      line-height: 1.45;
-      white-space: pre-wrap;
-      word-break: break-all;
-      color: #334155;
-      background: #f7fafc;
-      border: 1px solid var(--line);
-      border-radius: 8px;
-      padding: 10px;
+    }
+    tbody td { background: var(--table-row); color: var(--text); font-size: 12px; }
+    /* 类型列不固定，随横向滚动一起移动 */
+    th:first-child, td:first-child {
+      text-align: center;
+      font-weight: 650;
+      padding: 8px 8px;
+    }
+    .pager {
+      flex: 0 0 auto;
+      font-size: 12px;
+      color: #6b7280;
+      padding: 8px 4px 2px;
+      background: transparent;
     }
   </style>
 </head>
 <body>
-  <header>
-    <div>
-      <h1>现货 · 曲线 / 表格 Demo</h1>
-      <p>仿现场屏幕：上折线、下三指标表（测试对照）。「一键全流程」结果单独展示，不覆盖对照表。</p>
+  <div class="shell">
+    <header class="sys-bar">
+      <div class="left" id="sysDate">—</div>
+      <div class="center">现货生产信息申报系统</div>
+      <div class="right">
+        <span class="sys-ico" title="消息">
+          <svg viewBox="0 0 24 24"><path d="M12 22a2.5 2.5 0 0 0 2.45-2h-4.9A2.5 2.5 0 0 0 12 22zm8-6V11a8 8 0 1 0-16 0v5l-2 2v1h20v-1l-2-2z"/></svg>
+          <span class="sys-badge">2+</span>
+        </span>
+        <span class="sys-user">
+          <span class="avatar">
+            <svg viewBox="0 0 24 24"><path d="M12 12a5 5 0 1 0-5-5 5 5 0 0 0 5 5zm0 2c-4.42 0-8 2.24-8 5v1h16v-1c0-2.76-3.58-5-8-5z"/></svg>
+          </span>
+          <span>新平</span>
+        </span>
+        <button class="sys-btn red" type="button">退出</button>
+        <button class="sys-btn orange" type="button">主页</button>
+        <button class="sys-btn swap" id="btnNextData" type="button" title="切换下方表格/曲线测试数据">换数</button>
+      </div>
+    </header>
+
+    <div class="body-row">
+      <aside class="sidebar" aria-label="左侧导航">
+        <ul class="nav-list">
+          <li class="nav-item parent">
+            <span class="ico"><svg viewBox="0 0 24 24"><path d="M10 20v-6h4v6h5v-8h3L12 3 2 12h3v8z"/></svg></span>
+            <span>首页</span>
+          </li>
+          <li class="nav-item parent">
+            <span class="ico"><svg viewBox="0 0 24 24"><path d="M3 13h8V3H3v10zm0 8h8v-6H3v6zm10 0h8V11h-8v10zm0-18v6h8V3h-8z"/></svg></span>
+            <span>实时监控</span>
+            <span class="arrow">▼</span>
+          </li>
+          <li class="nav-item child">负荷曲线</li>
+          <li class="nav-item child">机组出力</li>
+          <li class="nav-item parent">
+            <span class="ico"><svg viewBox="0 0 24 24"><path d="M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm-7 14H7v-2h5v2zm5-4H7v-2h10v2zm0-4H7V7h10v2z"/></svg></span>
+            <span>现货申报</span>
+            <span class="arrow">▼</span>
+          </li>
+          <li class="nav-item child active">
+            <span>实时电能市场发布信息</span>
+          </li>
+          <li class="nav-item child">日前电量申报</li>
+          <li class="nav-item child">调频辅助服务</li>
+          <li class="nav-item parent">
+            <span class="ico"><svg viewBox="0 0 24 24"><path d="M19.14 12.94c.04-.31.06-.63.06-.94s-.02-.63-.06-.94l2.03-1.58a.49.49 0 0 0 .12-.61l-1.92-3.32a.49.49 0 0 0-.59-.22l-2.39.96a7.2 7.2 0 0 0-1.62-.94l-.36-2.54A.48.48 0 0 0 14 2h-4a.48.48 0 0 0-.48.41l-.36 2.54c-.59.24-1.13.55-1.62.94l-2.39-.96a.49.49 0 0 0-.59.22L2.65 8.87a.49.49 0 0 0 .12.61l2.03 1.58c-.04.31-.06.63-.06.94s.02.63.06.94L2.77 14.5a.49.49 0 0 0-.12.61l1.92 3.32c.12.22.37.3.59.22l2.39-.96c.5.39 1.03.7 1.62.94l.36 2.54c.05.24.25.41.48.41h4c.23 0 .43-.17.48-.41l.36-2.54c.59-.24 1.13-.55 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32a.49.49 0 0 0-.12-.61l-2.03-1.58zM12 15.6A3.6 3.6 0 1 1 15.6 12 3.6 3.6 0 0 1 12 15.6z"/></svg></span>
+            <span>系统管理</span>
+            <span class="arrow">▼</span>
+          </li>
+          <li class="nav-item child">用户管理</li>
+          <li class="nav-item child">权限配置</li>
+        </ul>
+      </aside>
+
+      <main class="page">
+        <div class="content-panel">
+          <div class="upper-panel">
+            <div class="page-head">
+              <h1 class="page-title" id="pageTitle">新平#61--实时电能市场发布信息</h1>
+              <div class="date-row">
+                <label for="bizDate">日期</label>
+                <div class="date-field">
+                  <span class="date-ico" aria-hidden="true">
+                    <svg viewBox="0 0 24 24"><path d="M19 4h-1V2h-2v2H8V2H6v2H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2zm0 16H5V10h14v10zm0-12H5V6h14v2z"/></svg>
+                  </span>
+                  <span class="date-text" id="bizDateText">2026-10-16</span>
+                  <input id="bizDate" type="date" aria-label="日期" />
+                </div>
+              </div>
+            </div>
+            <div class="chart-card">
+              <div id="chart" class="chart"></div>
+            </div>
+          </div>
+
+          <div class="page-gap" aria-hidden="true"></div>
+
+          <div class="table-zone">
+            <div class="table-card">
+              <div class="table-wrap">
+                <table id="dataTable">
+                  <colgroup id="colgroup"></colgroup>
+                  <thead id="thead"></thead>
+                  <tbody id="tbody"></tbody>
+                </table>
+              </div>
+            </div>
+            <div class="pager" id="pager">显示第 1 到第 3 条记录，总共 3 条记录</div>
+          </div>
+        </div>
+      </main>
     </div>
-    <div class="toolbar">
-      <label for="bizDate">业务日期</label>
-      <input id="bizDate" type="date" />
-      <button id="btnRun">一键全流程</button>
-      <button class="secondary" id="btnCapture">抓图</button>
-      <button class="secondary" id="btnNextData">换一批测试数据</button>
-      <a class="link" href="/">履历首页</a>
-      <a class="link" href="/debug">联调</a>
-    </div>
-  </header>
-
-  <main>
-    <section class="panel">
-      <div class="panel-title">曲线（三指标）</div>
-      <div class="meta">
-        <span id="dataName">数据集：—</span>
-        <span id="headerHint">表头：全天 00:15 ~ 24:00（15 分钟）</span>
-        <span>表样式：表头浅灰 / 数据行浅蓝</span>
-      </div>
-      <div id="chart"></div>
-    </section>
-
-    <section class="panel">
-      <div class="panel-title">表格数据（对照基准，不随全流程覆盖）</div>
-      <div class="table-wrap">
-        <table>
-          <thead id="thead"></thead>
-          <tbody id="tbody"></tbody>
-        </table>
-      </div>
-    </section>
-
-    <section class="panel">
-      <div class="panel-title">一键全流程结果</div>
-      <div class="meta">
-        <span>抓图 → OCR → 写 PI / Excel；下方 JSON 便于与上表对照</span>
-      </div>
-      <div id="status" class="status"></div>
-      <pre id="log">尚未执行。点「一键全流程」后，接口返回的 JSON 会显示在这里；上方曲线/表格保持不变。</pre>
-    </section>
-  </main>
+  </div>
 
   <script>
-    const LABELS = ["GX.DEMO.OCR_1", "GX.DEMO.OCR_2", "GX.DEMO.OCR_3"];
-    const COLORS = ["#94a3b8", "#38bdf8", "#2f6fed"];
+    const ROW_NAMES = ["省内实时中标电力", "实时发电计划", "省内实时中标电价"];
+    const COLORS = ["#9b59b6", "#3cb371", "#7f8c8d"];
 
     function pad(n) { return String(n).padStart(2, "0"); }
 
@@ -242,60 +543,153 @@
         const mins = i * 15;
         const hh = Math.floor(mins / 60);
         const mm = mins % 60;
-        if (hh === 24) headers.push("24:00");
-        else headers.push(`${pad(hh)}:${pad(mm)}`);
+        headers.push(hh === 24 ? "24:00" : `${pad(hh)}:${pad(mm)}`);
       }
       return headers;
     }
 
-    function series(seed, base, amp, wave) {
+    const DEFAULT_HEADERS = fullDayHeaders();
+
+    function zeros() {
+      return DEFAULT_HEADERS.map(() => 0);
+    }
+
+    /** 全天曲线；allowNeg 时允许负值（第三组电价） */
+    function series(seed, base, amp, wave, opts) {
+      const o = opts || {};
+      const morning = o.morning || 0;
+      const evening = o.evening || 0;
+      const noise = o.noise || 0;
+      const allowNeg = !!o.allowNeg;
       const out = [];
       for (let i = 0; i < 96; i++) {
         const t = i / 96;
-        const v = base
-          + amp * Math.sin((t + seed) * Math.PI * wave)
-          + (i % 7 === 0 ? amp * 0.15 : 0);
+        const h = (i + 1) * 0.25;
+        let v = base + amp * Math.sin((t + seed) * Math.PI * wave);
+        if (h >= 8 && h <= 12) v += morning * Math.sin(((h - 8) / 4) * Math.PI);
+        if (h >= 17 && h <= 22) v += evening * Math.sin(((h - 17) / 5) * Math.PI);
+        if (noise) v += noise * Math.sin(i * 0.7 + seed * 9);
+        if (!allowNeg && v < 0) v = 0;
         out.push(Math.round(v * 1000) / 1000);
       }
       return out;
     }
 
-    const DEFAULT_HEADERS = fullDayHeaders();
+    function priceSeries(seed, base, amp, wave, opts) {
+      const o = opts || {};
+      const evening = o.evening || 0;
+      const noon = o.noon || 0;
+      const out = [];
+      for (let i = 0; i < 96; i++) {
+        const h = (i + 1) * 0.25;
+        let v = base + amp * Math.sin((i / 96 + seed) * Math.PI * wave);
+        if (h >= 10 && h <= 13) v += noon;
+        if (h >= 18 && h <= 22) v += evening;
+        if (h >= 14 && h <= 16) v -= (o.dip || 0);
+        out.push(Math.round(v * 1000) / 1000);
+      }
+      return out;
+    }
 
+    /**
+     * 表格展示：最多 6 个字符（含小数点、负号）
+     * 常见形态：xxx.xx / xx.xxx / xx.xx / x.xxx / -x.xxx / 0
+     */
+    function formatCell(v) {
+      if (v == null || v === "") return "";
+      const n = Number(v);
+      if (!Number.isFinite(n)) return String(v);
+      if (n === 0) return "0";
+
+      const neg = n < 0;
+      let abs = Math.abs(n);
+      abs = Math.round(abs * 1000) / 1000;
+
+      // 按量级选小数位，贴近 OCR 现场：7.234、24.53、38.756、-1.234
+      let decimals;
+      if (abs >= 100) decimals = 2;       // 116.79
+      else if (abs >= 10) decimals = (Math.floor(abs * 1000) % 10 === 0) ? 2 : 3; // 24.53 或 38.756
+      else decimals = 3;                  // 7.234 / 1.234
+
+      let s = abs.toFixed(decimals);
+      // 去掉末尾多余 0，但至少保留一位小数（非整数时）
+      if (s.indexOf(".") >= 0) {
+        s = s.replace(/0+$/, "").replace(/\.$/, "");
+        if (s.indexOf(".") < 0 && abs % 1 !== 0) s += ".0";
+      }
+
+      let out = neg ? ("-" + s) : s;
+      // 总长超过 6：逐步降小数位
+      while (out.length > 6 && decimals > 0) {
+        decimals -= 1;
+        s = abs.toFixed(decimals).replace(/0+$/, "").replace(/\.$/, "");
+        out = neg ? ("-" + s) : s;
+      }
+      if (out.length > 6) {
+        // 整数仍超长则截断（极少）
+        out = out.slice(0, 6);
+      }
+      return out;
+    }
+
+    // 三组测试数据：1) 前两行全 0  2) 小电价  3) 含负数
     const DATASETS = [
       {
-        name: "示例 A · 平稳波动",
+        name: "1 · 前两行全0",
         headers: DEFAULT_HEADERS,
         rows: [
-          series(0.1, 0, 0, 1).map(() => 0),
-          series(0.2, 0, 0, 1).map(() => 0),
-          series(0.05, 380, 45, 4),
-        ],
-      },
-      {
-        name: "示例 B · 晚高峰抬升",
-        headers: DEFAULT_HEADERS,
-        rows: [
-          series(0.0, 10, 8, 2),
-          series(0.3, 5, 4, 3),
+          zeros(),
+          zeros(),
+          // 中等电价，混用 xxx.xx / xx.xxx 形态
           DEFAULT_HEADERS.map((_, i) => {
-            const h = i / 4;
-            const peak = h >= 18 && h <= 22 ? 80 : 0;
-            return Math.round((320 + peak + 20 * Math.sin(i / 5)) * 1000) / 1000;
+            const sample = [
+              38.756, 22.593, 22.641, 35.2, 48.15, 62.4, 55.02, 41.28,
+              28.5, 19.84, 15.2, 12.05, 18.4, 25.63, 40.1, 58.32,
+            ];
+            if (i < sample.length) return sample[i];
+            const h = (i + 1) * 0.25;
+            const dip = h >= 14 && h <= 16 ? -28 : 0;
+            const peak = h >= 10 && h <= 12 ? 36 : 0;
+            return Math.round((80 + peak + dip + 22 * Math.sin(i / 5)) * 1000) / 1000;
           }),
         ],
       },
       {
-        name: "示例 C · 对照样本风格",
+        name: "2 · 小电价",
         headers: DEFAULT_HEADERS,
         rows: [
-          series(0.0, 0, 0, 1).map(() => 0),
-          series(0.0, 0, 0, 1).map(() => 0),
+          series(0.1, 12, 4, 2, { morning: 3, evening: 5, noise: 0.6 }),
+          series(0.22, 15, 3.5, 2.2, { morning: 2.5, evening: 6, noise: 0.5 }),
+          // 小电价：7.234、24.53 量级
           DEFAULT_HEADERS.map((_, i) => {
-            const sample = [362.381,400,367.824,393.393,394.069,400,400,477.92,470.84,400,395,395,400,400,410,391.947,477.92,410,390,410,395,393,380,387];
-            const idx = DEFAULT_HEADERS.indexOf("18:15");
-            if (i >= idx && i - idx < sample.length) return sample[i - idx];
-            return Math.round((350 + 15 * Math.sin(i / 6)) * 1000) / 1000;
+            const sample = [
+              7.234, 8.15, 9.082, 11.4, 14.56, 18.2, 22.53, 24.53,
+              21.08, 16.7, 12.345, 9.86, 8.2, 7.501, 6.88, 5.234,
+            ];
+            if (i < sample.length) return sample[i];
+            const h = (i + 1) * 0.25;
+            let v = 10 + 8 * Math.sin(i / 6) + (h >= 18 && h <= 21 ? 6 : 0);
+            if (v < 1.2) v = 1.2 + (i % 5) * 0.1;
+            return Math.round(v * 1000) / 1000;
+          }),
+        ],
+      },
+      {
+        name: "3 · 含负数",
+        headers: DEFAULT_HEADERS,
+        rows: [
+          series(0.15, 8, 6, 2.4, { morning: 4, evening: 3, noise: 0.8, allowNeg: true }),
+          series(0.3, 10, 5, 2.1, { morning: 3, evening: 4, noise: 0.7 }),
+          // 部分时段为负：-1.234、-0.856 等
+          DEFAULT_HEADERS.map((_, i) => {
+            const sample = [
+              5.12, 3.456, 1.2, -0.856, -1.234, -2.15, -1.08, 0.456,
+              2.3, 4.567, 6.12, 8.9, 7.234, 3.1, -0.5, -1.789,
+            ];
+            if (i < sample.length) return sample[i];
+            const h = (i + 1) * 0.25;
+            let v = 4 * Math.sin(i / 5) + (h >= 13 && h <= 16 ? -3.5 : 2);
+            return Math.round(v * 1000) / 1000;
           }),
         ],
       },
@@ -303,142 +697,187 @@
 
     let dataIndex = 0;
     const chart = echarts.init(document.getElementById("chart"));
-    const statusEl = document.getElementById("status");
-    const logEl = document.getElementById("log");
-    const btnRun = document.getElementById("btnRun");
-    const btnCapture = document.getElementById("btnCapture");
     const btnNext = document.getElementById("btnNextData");
-
-    function setStatus(text, ok) {
-      statusEl.textContent = text;
-      statusEl.className = "status " + (ok === true ? "ok" : ok === false ? "err" : "");
-    }
-    function showLog(obj) {
-      logEl.textContent = typeof obj === "string" ? obj : JSON.stringify(obj, null, 2);
-    }
-    function setBusy(busy) {
-      btnRun.disabled = busy;
-      btnCapture.disabled = busy;
-      btnNext.disabled = busy;
-    }
 
     function current() {
       return DATASETS[dataIndex];
     }
 
+    function toNumRows(rows) {
+      return (rows || []).map((row) =>
+        (row || []).map((v) => {
+          const n = Number(String(v).replace(/,/g, "").trim());
+          return Number.isFinite(n) ? n : null;
+        })
+      );
+    }
+
+    function formatSysDate(d) {
+      const y = d.getFullYear();
+      const m = d.getMonth() + 1;
+      const day = d.getDate();
+      return `${y}年${m}月${day}日`;
+    }
+
+    function syncDates(iso) {
+      const d = iso ? new Date(iso + "T00:00:00") : new Date();
+      document.getElementById("sysDate").textContent = formatSysDate(d);
+      const text = iso || localYmd(d);
+      document.getElementById("bizDateText").textContent = text;
+      const input = document.getElementById("bizDate");
+      if (input.value !== text) input.value = text;
+    }
+
+    function localYmd(d) {
+      return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+    }
+
     function renderChart(ds) {
       const headers = ds.headers;
+      const numRows = toNumRows(ds.rows);
+      const names = ROW_NAMES;
+      const powerVals = [];
+      const priceVals = [];
+      numRows.forEach((row, i) => {
+        row.forEach((v) => {
+          if (v == null) return;
+          if (i >= 2) priceVals.push(v);
+          else powerVals.push(v);
+        });
+      });
+      const powerMaxRaw = powerVals.length ? Math.max(...powerVals) : 1;
+      const powerMinRaw = powerVals.length ? Math.min(...powerVals) : 0;
+      const priceMaxRaw = priceVals.length ? Math.max(...priceVals) : 1;
+      const priceMinRaw = priceVals.length ? Math.min(...priceVals) : 0;
+      const powerMin = powerMinRaw < 0 ? Math.floor(powerMinRaw) : 0;
+      const powerMax = powerMaxRaw <= 1 && powerMin === 0 ? 1 : Math.ceil(Math.max(powerMaxRaw, 1));
+      // 小电价按数据自适应，大电价按 50 取整；负数下探
+      const priceSpan = Math.max(Math.abs(priceMaxRaw), Math.abs(priceMinRaw), 1);
+      const priceStep = priceSpan <= 40 ? 5 : 50;
+      const priceMax = Math.ceil(Math.max(priceMaxRaw, 0) / priceStep) * priceStep || priceStep;
+      const priceMin = priceMinRaw < 0
+        ? Math.floor(priceMinRaw / priceStep) * priceStep
+        : 0;
+
       chart.setOption({
         color: COLORS,
         tooltip: { trigger: "axis" },
-        legend: { data: LABELS, top: 0 },
-        grid: { left: 48, right: 24, top: 40, bottom: 56 },
+        legend: {
+          data: names,
+          top: 4,
+          left: "center",
+          textStyle: { fontSize: 12, color: "#4b5563" },
+          itemWidth: 14,
+          itemHeight: 10,
+          icon: "roundRect",
+        },
+        grid: { left: 48, right: 44, top: 36, bottom: 28 },
         xAxis: {
           type: "category",
           data: headers,
-          axisLabel: { rotate: 45, fontSize: 10, interval: Math.max(1, Math.floor(headers.length / 24)) },
+          axisLabel: {
+            fontSize: 10,
+            color: "#6b7280",
+            interval: 5,
+          },
           axisLine: { lineStyle: { color: "#c5d0de" } },
+          axisTick: { show: false },
+          boundaryGap: false,
         },
-        yAxis: {
-          type: "value",
-          splitLine: { lineStyle: { color: "#e8eef5" } },
-        },
-        series: LABELS.map((name, i) => ({
-          name,
-          type: "line",
-          smooth: true,
-          showSymbol: false,
-          connectNulls: false,
-          lineStyle: { width: i === 2 ? 2.5 : 1.5 },
-          data: ds.rows[i],
-        })),
+        yAxis: [
+          {
+            type: "value",
+            name: "单位(MW)",
+            nameTextStyle: { fontSize: 10, color: "#7a8799", padding: [0, 0, 0, 0] },
+            min: powerMin,
+            max: powerMax,
+            splitNumber: 5,
+            axisLabel: { fontSize: 10, color: "#6b7280" },
+            splitLine: { lineStyle: { color: "#e8eef5" } },
+          },
+          {
+            type: "value",
+            name: "单位(元/MWh)",
+            nameTextStyle: { fontSize: 10, color: "#7a8799" },
+            min: priceMin,
+            max: priceMax,
+            splitNumber: 5,
+            axisLabel: { fontSize: 10, color: "#6b7280" },
+            splitLine: { show: false },
+          },
+        ],
+        series: names.map((name, i) => {
+          const usePrice = i >= 2;
+          return {
+            name,
+            type: "line",
+            yAxisIndex: usePrice ? 1 : 0,
+            showSymbol: false,
+            smooth: usePrice,
+            connectNulls: false,
+            lineStyle: { width: usePrice ? 2.2 : 1.6 },
+            data: (numRows[i] || []).map((v) => (v == null ? null : v)),
+          };
+        }),
       }, true);
     }
 
+    const COL_TYPE_W = 140;
+    const COL_TIME_W = 76; // 继续放宽，左端约可见到 04:30
+
     function renderTable(ds) {
       const headers = ds.headers;
+      const n = headers.length;
+      const table = document.getElementById("dataTable");
+      const colgroup = document.getElementById("colgroup");
       const thead = document.getElementById("thead");
       const tbody = document.getElementById("tbody");
-      thead.innerHTML = "<tr><th>指标</th>" + headers.map(h => `<th>${h}</th>`).join("") + "</tr>";
-      tbody.innerHTML = LABELS.map((name, i) => {
-        const cells = ds.rows[i].map(v => `<td>${v == null ? "" : v}</td>`).join("");
+
+      colgroup.innerHTML =
+        `<col class="col-type" style="width:${COL_TYPE_W}px" />` +
+        headers.map(() => `<col class="col-time" style="width:${COL_TIME_W}px" />`).join("");
+      table.style.width = (COL_TYPE_W + n * COL_TIME_W) + "px";
+
+      thead.innerHTML = "<tr><th>类型</th>" + headers.map((h) => `<th>${h}</th>`).join("") + "</tr>";
+      tbody.innerHTML = ROW_NAMES.map((name, i) => {
+        const cells = (ds.rows[i] || []).map((v) => `<td>${formatCell(v)}</td>`).join("");
         return `<tr><td>${name}</td>${cells}</tr>`;
       }).join("");
+      document.getElementById("pager").textContent =
+        `显示第 1 到第 ${ROW_NAMES.length} 条记录，总共 ${ROW_NAMES.length} 条记录`;
     }
 
     function renderAll() {
       const ds = current();
-      document.getElementById("headerHint").textContent =
-        `表头：全天 00:15 ~ 24:00（${ds.headers.length} 点）`;
-      document.getElementById("dataName").textContent =
-        `数据集：${ds.name}（${dataIndex + 1}/${DATASETS.length}）`;
       renderChart(ds);
       renderTable(ds);
+      chart.resize();
     }
 
-    async function call(url, options) {
-      setBusy(true);
-      setStatus("请求中…");
-      try {
-        const resp = await fetch(url, options);
-        const data = await resp.json().catch(() => ({ detail: resp.statusText }));
-        if (!resp.ok) {
-          setStatus(data.detail || ("HTTP " + resp.status), false);
-          showLog(data);
-          return null;
-        }
-        setStatus(data.ok ? "全流程完成" : "全流程结束（有失败项，见 JSON）", !!data.ok);
-        showLog(data);
-        return data;
-      } catch (e) {
-        setStatus(String(e), false);
-        showLog(String(e));
-        return null;
-      } finally {
-        setBusy(false);
-      }
-    }
-
-    document.getElementById("btnNextData").onclick = () => {
+    btnNext.onclick = () => {
       dataIndex = (dataIndex + 1) % DATASETS.length;
       renderAll();
-      setStatus(`已切换对照数据：${DATASETS[dataIndex].name}`, true);
+      btnNext.title = `当前：${DATASETS[dataIndex].name}（点击切换）`;
     };
 
-    document.getElementById("btnCapture").onclick = async () => {
-      setBusy(true);
-      setStatus("抓图中…");
-      try {
-        const resp = await fetch("/api/capture", { method: "POST" });
-        const data = await resp.json().catch(() => ({ detail: resp.statusText }));
-        if (!resp.ok) {
-          setStatus(data.detail || ("HTTP " + resp.status), false);
-          showLog(data);
-          return;
-        }
-        setStatus("抓图成功（仅存盘，未跑 OCR/PI）", true);
-        showLog(data);
-      } catch (e) {
-        setStatus(String(e), false);
-        showLog(String(e));
-      } finally {
-        setBusy(false);
-      }
-    };
+    document.getElementById("bizDate").addEventListener("change", (e) => {
+      syncDates(e.target.value);
+    });
+    document.getElementById("bizDate").addEventListener("input", (e) => {
+      if (e.target.value) syncDates(e.target.value);
+    });
 
-    document.getElementById("btnRun").onclick = async () => {
-      const base_date = document.getElementById("bizDate").value || null;
-      // 仅刷新下方结果卡片，不改动上方曲线/表格对照基准
-      await call("/api/run", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ base_date }),
-      });
-    };
-
-    document.getElementById("bizDate").value = new Date().toISOString().slice(0, 10);
+    const today = localYmd(new Date());
+    document.getElementById("bizDate").value = today;
+    syncDates(today);
     renderAll();
-    window.addEventListener("resize", () => chart.resize());
+    let resizeTimer = 0;
+    window.addEventListener("resize", () => {
+      clearTimeout(resizeTimer);
+      resizeTimer = setTimeout(() => chart.resize(), 50);
+    });
+    // 首次布局后再 resize 一次，避免初始宽度被宽表格影响
+    requestAnimationFrame(() => chart.resize());
   </script>
 </body>
 </html>

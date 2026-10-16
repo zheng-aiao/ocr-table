@@ -1,6 +1,0 @@
-layout=dual
-winner=cand_table_auto
-score=(10, 3, 105, -0.41580000000000006)
-source=D:\yw\gx-ocr\ocr-page\data\ocr_runs\dual\20261014_155805_664\left\cand_table_auto.jpg
-base_date=2026-10-14
-date_source=ocr

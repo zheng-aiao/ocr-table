@@ -28,7 +28,6 @@ from .config import (
     resolve_ocr_workdir,
 )
 from .excel_export import export_ocr_excel
-from .hikvision import build_camera_client
 from .monitor_crop import prepare_monitor_work_image
 from .ocr_bridge import extract_points_from_image, ocr_result_to_dict, row_tag_name
 from .pi_client import get_pi_client
@@ -66,14 +65,61 @@ def evaluate_ocr_point_count(
 
 
 def capture_only() -> Dict[str, Any]:
+    """调试：并行抓两路摄像头，并预裁有效区域（auto_monitor）供联调预览。"""
+    from .config import get_auto_monitor, resolve_project_path
+    from .monitor_crop import prepare_monitor_work_image
+    from .pipeline_dual import capture_dual_cameras, get_camera_defs
+
     cfg = get_config()
-    client = build_camera_client(cfg, ROOT_DIR)
-    path = client.capture()
+    cams = get_camera_defs(cfg)
+    captured = capture_dual_cameras(cfg)
+    auto_monitor = get_auto_monitor(cfg)
+
+    # 预览裁剪落盘到当日 captures/_preview/<ts>/
+    from datetime import datetime as _dt
+
+    preview_root = (
+        Path(resolve_project_path((cfg.get("capture") or {}).get("dir", "data/captures")))
+        / _dt.now().strftime("%Y%m%d")
+        / "_preview"
+        / _dt.now().strftime("%H%M%S_%f")
+    )
+    preview_root.mkdir(parents=True, exist_ok=True)
+
+    sides_out: Dict[str, Any] = {}
+    for side in ("left", "right"):
+        cam = cams[side]
+        src = captured.get(side)
+        item: Dict[str, Any] = {
+            "image_path": str(src) if src else "",
+            "monitor_path": "",
+            "host": cam.get("host"),
+            "type": cam.get("type"),
+            "tag": cam.get("tag"),
+            "size": src.stat().st_size if src else 0,
+        }
+        if src and src.is_file():
+            side_dir = preview_root / side
+            side_dir.mkdir(parents=True, exist_ok=True)
+            work_path, mon_meta, mon_str = prepare_monitor_work_image(
+                src, side_dir, enabled=bool(auto_monitor)
+            )
+            item["monitor_path"] = mon_str or str(work_path)
+            item["monitor"] = mon_meta
+            item["work_image_path"] = str(work_path)
+        sides_out[side] = item
+
     return {
         "ok": True,
-        "image_path": str(path),
-        "url": client.picture_url,
-        "size": path.stat().st_size,
+        "capture_mode": "double_camera",
+        "left": sides_out["left"],
+        "right": sides_out["right"],
+        "left_image": sides_out["left"].get("image_path") or "",
+        "right_image": sides_out["right"].get("image_path") or "",
+        # 兼容旧前端：无单张 image_path 时用左图
+        "image_path": sides_out["left"].get("image_path")
+        or sides_out["right"].get("image_path")
+        or "",
     }
 
 
@@ -130,18 +176,16 @@ def ocr_only(
     run_dir = new_ocr_run_dir("single", cfg)
     source_copy = _copy_source(image_path, run_dir)
 
-    # 单屏同样先裁显示器：宽贴满、上下有环境时纠正日期/表区比例
-    single_cfg = (cfg.get("capture") or {}).get("single") or {}
-    dual_cfg = (cfg.get("capture") or {}).get("dual") or {}
-    auto_monitor = single_cfg.get("auto_monitor")
-    if auto_monitor is None:
-        auto_monitor = dual_cfg.get("auto_monitor")
-    if auto_monitor is None:
-        auto_monitor = True
+    # 由 capture.auto_monitor 控制是否先裁显示器有效区域
+    from .config import get_auto_monitor
+
+    auto_monitor = get_auto_monitor(cfg)
     work_path, monitor_meta, monitor_path = prepare_monitor_work_image(
         image_path, run_dir, enabled=bool(auto_monitor)
     )
     work_image = str(work_path)
+
+    from .camera_common import cam_log_prefix
 
     t_ocr = time.perf_counter()
     result = extract_points_from_image(
@@ -162,6 +206,7 @@ def ocr_only(
         date_cfg=get_ocr_date_cfg(cfg, layout="single"),
         table_crop=get_ocr_table_crop(cfg, layout="single"),
         onnx_threads=get_ocr_onnx_threads(cfg),
+        log_prefix=cam_log_prefix("single"),
     )
     ocr_ms = _elapsed_ms(t_ocr)
     payload = {**ocr_result_to_dict(result)}
@@ -329,13 +374,30 @@ def run_pipeline(
     *,
     trigger: str = "manual",
 ) -> Dict[str, Any]:
-    """一键：抓图 → OCR 整表 → Excel → 按行测点写 PI。"""
+    """按 capture.mode：double/dual → 双摄流水线；single → 单路（左相机）。"""
+    from .pipeline_dual import get_capture_mode, run_pipeline_dual
+
+    mode = get_capture_mode()
+    if mode in ("double", "dual"):
+        return run_pipeline_dual(trigger=trigger)
+    return _run_pipeline_single_legacy(base_date=base_date, trigger=trigger)
+
+
+def _run_pipeline_single_legacy(
+    base_date: Optional[datetime] = None,
+    *,
+    trigger: str = "manual",
+) -> Dict[str, Any]:
+    """旧单摄流水线（保留代码，本分支默认不调用）。"""
+    from .hikvision import build_camera_client_for_side
+    from .pipeline_dual import get_camera_defs
     from .run_store import persist_pipeline_result
 
     t_all = time.perf_counter()
     started_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     cfg = get_config()
-    cam = build_camera_client(cfg, ROOT_DIR)
+    cams = get_camera_defs(cfg)
+    cam = build_camera_client_for_side(cfg, ROOT_DIR, "left", cams["left"])
     t_cap = time.perf_counter()
     image_path = cam.capture()
     capture_ms = _elapsed_ms(t_cap)
@@ -343,16 +405,14 @@ def run_pipeline(
     ocr_cfg = cfg.get("ocr", {})
     run_dir = new_ocr_run_dir("single", cfg)
     source_copy = _copy_source(str(image_path), run_dir)
-    single_cfg = (cfg.get("capture") or {}).get("single") or {}
-    dual_cfg = (cfg.get("capture") or {}).get("dual") or {}
-    auto_monitor = single_cfg.get("auto_monitor")
-    if auto_monitor is None:
-        auto_monitor = dual_cfg.get("auto_monitor")
-    if auto_monitor is None:
-        auto_monitor = True
+    from .config import get_auto_monitor
+
+    auto_monitor = get_auto_monitor(cfg)
     work_path, monitor_meta, monitor_path = prepare_monitor_work_image(
         image_path, run_dir, enabled=bool(auto_monitor)
     )
+    from .camera_common import cam_log_prefix
+
     t_ocr = time.perf_counter()
     ocr = extract_points_from_image(
         image_path=str(work_path),
@@ -372,6 +432,7 @@ def run_pipeline(
         date_cfg=get_ocr_date_cfg(cfg, layout="single"),
         table_crop=get_ocr_table_crop(cfg, layout="single"),
         onnx_threads=get_ocr_onnx_threads(cfg),
+        log_prefix=cam_log_prefix("single"),
     )
     ocr_ms = _elapsed_ms(t_ocr)
     ocr_dict = ocr_result_to_dict(ocr)
