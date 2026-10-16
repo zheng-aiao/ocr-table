@@ -425,6 +425,45 @@
           ],
         },
       },
+      {
+        // 模拟现场：已出清有数，未出清从 18:45 起显示 "-"
+        name: "示例 D · 无数据(-)",
+        left: {
+          rows: (() => {
+            const cut = HEADERS.indexOf("18:45");
+            const withCut = (row) =>
+              HEADERS.map((_, i) => (i >= cut ? "-" : row[i]));
+            const priceAt = {
+              "16:30": 193.11,
+              "16:45": 201.131,
+              "17:00": 136.171,
+              "17:15": 134.994,
+              "17:30": 135.486,
+              "17:45": 152.072,
+              "18:00": 187.345,
+              "18:15": 187.997,
+              "18:30": 291.55,
+            };
+            const price = HEADERS.map((h, i) => {
+              if (priceAt[h] != null) return priceAt[h];
+              return Math.round((160 + 35 * Math.sin(i / 6)) * 1000) / 1000;
+            });
+            return [withCut(zeros()), withCut(zeros()), withCut(price)];
+          })(),
+        },
+        right: {
+          rows: (() => {
+            const cut = HEADERS.indexOf("18:45");
+            const withCut = (row) =>
+              HEADERS.map((_, i) => (i >= cut ? "-" : row[i]));
+            const price = fillPrice(
+              [116.79, 116.79, 93.582, 116.88, 138.755, 116.085, 112.923],
+              2
+            );
+            return [withCut(zeros()), withCut(zeros()), withCut(price)];
+          })(),
+        },
+      },
     ];
 
     let dataIndex = 0;

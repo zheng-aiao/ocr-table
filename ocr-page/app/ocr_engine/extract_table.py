@@ -58,6 +58,8 @@ class TableImageExtractor:
     IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".bmp", ".webp", ".tif", ".tiff"}
     DEFAULT_TIME_STEP = 15
     DEFAULT_END_TIME = "24:00"
+    # 整格只有「-」：内部标记，最终输出为空且不再单列重识
+    NODATA_MARK = "\x00"
     # 放大后宽度上限：原 2.5x 可达 ~10k 宽，整图 OCR 很慢；8000 兼顾速度与小字可读性
     MAX_OCR_WIDTH = 8000
     # 默认表区（与 _default_table_crop / auto 失败回退一致；仅下半屏）
@@ -73,6 +75,11 @@ class TableImageExtractor:
     # 纠偏门槛：低于此角度视为已正；过大更像误检
     DESKEW_MIN_ANGLE_DEG = 0.5
     DESKEW_MAX_ANGLE_DEG = 18.0
+    # 蓝底倾角只在表体够宽、够实的时候才信；零星蓝点的外接矩形会给出假倾角
+    DESKEW_BLUE_MIN_AREA_RATIO = 0.02
+    DESKEW_BLUE_MIN_WIDTH_RATIO = 0.55
+    # 蓝底角与表格线中位角差过这个值，以表格线为准，不按蓝底转
+    DESKEW_BLUE_HOUGH_MAX_DISAGREE_DEG = 4.0
     # 透视四边形：超过这些更像「蓝底吃进曲线/假梯形」，宁可不拉
     DESKEW_QUAD_MAX_EDGE_ANGLE_DEG = 6.0
     DESKEW_QUAD_MAX_SIDE_SKEW = 0.12
@@ -122,7 +129,6 @@ class TableImageExtractor:
         self,
         scale: float = 2.5,
         min_confidence: float = 0.25,
-        sanitize: Optional[Dict[str, Any]] = None,
         fix_decimal: Optional[Dict[str, Any]] = None,
         max_ocr_width: Optional[int] = None,
         onnx_threads: Optional[int] = None,
@@ -130,7 +136,6 @@ class TableImageExtractor:
         """
         @param scale          识别前放大倍数，宽表建议 2.5
         @param min_confidence OCR 最低置信度
-        @param sanitize       同行量级清洗配置（见 config.yaml ocr.sanitize）
         @param fix_decimal    小数点补点配置（见 config.yaml ocr.fix_decimal）
         @param max_ocr_width  放大后最大宽度（像素），默认 MAX_OCR_WIDTH
         @param onnx_threads   ONNX 每会话 intra 线程数；默认 2，避免占满 CPU 拖慢浏览器
@@ -154,19 +159,6 @@ class TableImageExtractor:
         cpu_n = max(1, os.cpu_count() or 4)
         reserve = 2 if cpu_n >= 4 else 1
         self.onnx_threads = max(1, min(nt, cpu_n - reserve, cpu_n))
-        raw = sanitize if isinstance(sanitize, dict) else {}
-        self.sanitize_enabled = bool(raw.get("enabled", True))
-        try:
-            self.sanitize_ratio_k = max(1.0, float(raw.get("ratio_k", 3.0)))
-        except (TypeError, ValueError):
-            self.sanitize_ratio_k = 3.0
-        try:
-            self.sanitize_min_samples = max(2, int(raw.get("min_samples", 4)))
-        except (TypeError, ValueError):
-            self.sanitize_min_samples = 4
-        # 位数众数相关配置已废弃，保留属性以免旧调用报错
-        self.sanitize_majority_ratio = 0.5
-        self.sanitize_boundary_pct = 0.15
         if isinstance(fix_decimal, bool):
             self.fix_decimal_enabled = fix_decimal
             self.fix_decimal_ratio_k = 3.0
@@ -257,7 +249,9 @@ class TableImageExtractor:
 
     def _estimate_hough_median_angle(self, img: np.ndarray) -> Optional[float]:
         """
-        近水平霍夫线段中位数角度（度）。
+        近水平霍夫线段的长度加权中位角（度）。
+        拍屏网格偏淡：高阈值 Canny 经常一条线都没有，验收就会放行假旋转。
+        高低两档边缘合并，并放宽最短线长。
         OpenCV 4 返回 (N,1,4)，OpenCV 5 返回 (N,4)，统一 reshape。
         """
         h, w = img.shape[:2]
@@ -265,21 +259,25 @@ class TableImageExtractor:
             return None
         gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
         gray = cv2.GaussianBlur(gray, (3, 3), 0)
-        edges = cv2.Canny(gray, 50, 150, apertureSize=3)
-        min_len = max(int(w * 0.12), 40)
+        edges = cv2.bitwise_or(
+            cv2.Canny(gray, 50, 150, apertureSize=3),
+            cv2.Canny(gray, 25, 80, apertureSize=3),
+        )
+        min_len = max(int(w * 0.055), 32)
         lines = cv2.HoughLinesP(
             edges,
             rho=1,
             theta=np.pi / 180.0,
-            threshold=max(40, w // 40),
+            threshold=max(22, w // 80),
             minLineLength=min_len,
-            maxLineGap=max(8, w // 80),
+            maxLineGap=max(10, w // 70),
         )
         if lines is None:
             return None
         # OpenCV 5+: (N,4)；旧版: (N,1,4)
         pts = np.asarray(lines).reshape(-1, 4)
         angles: List[float] = []
+        weights: List[float] = []
         for x1, y1, x2, y2 in pts:
             dx = float(x2) - float(x1)
             dy = float(y2) - float(y1)
@@ -289,9 +287,16 @@ class TableImageExtractor:
             if abs(ang) > 25.0:
                 continue
             angles.append(ang)
-        if len(angles) < 5:
+            weights.append(math.hypot(dx, dy))
+        if len(angles) < 8:
             return None
-        return float(np.median(angles))
+        order = np.argsort(np.asarray(angles, dtype=np.float64))
+        ang_s = np.asarray(angles, dtype=np.float64)[order]
+        w_s = np.asarray(weights, dtype=np.float64)[order]
+        cum = np.cumsum(w_s)
+        idx = int(np.searchsorted(cum, cum[-1] * 0.5))
+        idx = min(max(idx, 0), len(ang_s) - 1)
+        return float(ang_s[idx])
 
     def _table_body_blue_mask(
         self,
@@ -451,12 +456,16 @@ class TableImageExtractor:
     def _rotate_image_by_angle(
         self, img: np.ndarray, angle_deg: float
     ) -> Optional[np.ndarray]:
-        """按倾角 θ 反向旋转拉平（OpenCV 正角为逆时针）。"""
+        """
+        按倾角 θ 拉平。
+        角度来自 atan2(dy, dx)，y 向下，正角表示右端更低。
+        OpenCV 正角为逆时针，与这个定义同向，直接用 θ 即可把行拉平。
+        """
         h, w = img.shape[:2]
         if abs(angle_deg) < 1e-6:
             return img
         center = (w * 0.5, h * 0.5)
-        m = cv2.getRotationMatrix2D(center, -float(angle_deg), 1.0)
+        m = cv2.getRotationMatrix2D(center, float(angle_deg), 1.0)
         cos_a = abs(m[0, 0])
         sin_a = abs(m[0, 1])
         nw = int(h * sin_a + w * cos_a)
@@ -475,6 +484,15 @@ class TableImageExtractor:
         mask = self._table_body_blue_mask(img, ignore_top=max(1, int(h * 0.08)))
         coords = cv2.findNonZero(mask)
         if coords is None or len(coords) < 80:
+            return None
+        # 灰白表体上的零星蓝点：外接矩形很大但像素极少，倾角不可用
+        if len(coords) < max(800, int(h * w * self.DESKEW_BLUE_MIN_AREA_RATIO)):
+            return None
+        xs = coords[:, 0, 0]
+        ys = coords[:, 0, 1]
+        if float(xs.max() - xs.min()) < w * self.DESKEW_BLUE_MIN_WIDTH_RATIO:
+            return None
+        if float(ys.max() - ys.min()) < h * 0.08:
             return None
         rect = cv2.minAreaRect(coords)
         box = self._order_quad_points(cv2.boxPoints(rect))
@@ -508,6 +526,12 @@ class TableImageExtractor:
         if abs(angle) > self.DESKEW_MAX_ANGLE_DEG:
             return None
         before_hough = self._estimate_hough_median_angle(img)
+        # 表格线已经接近水平，或与蓝底角明显不一致：蓝底是误检，不转
+        if before_hough is not None and (
+            abs(before_hough) < self.DESKEW_MIN_ANGLE_DEG
+            or abs(angle - before_hough) > self.DESKEW_BLUE_HOUGH_MAX_DISAGREE_DEG
+        ):
+            return None
         rotated = self._rotate_image_by_angle(img, angle)
         if rotated is None:
             return None
@@ -532,7 +556,7 @@ class TableImageExtractor:
     ) -> Optional[np.ndarray]:
         """
         用近水平线段中位数角度做整图旋转纠偏。
-        测得倾角 θ 时旋转 -θ 拉平；纠后残角须改善，否则丢弃（宁可不转）。
+        测得倾角 θ 时按 θ 拉平；纠后残角须改善，测不到残角也丢弃（宁可不转）。
         """
         if angle is None:
             angle = self._estimate_hough_median_angle(img)
@@ -547,14 +571,15 @@ class TableImageExtractor:
         if rotated is None:
             return None
         after = self._estimate_hough_median_angle(rotated)
-        if before is not None and after is not None:
-            if abs(after) > abs(before) + 0.05:
-                return None
-            if (
-                abs(after) > abs(before) - 0.15
-                and abs(after) >= self.DESKEW_MIN_ANGLE_DEG
-            ):
-                return None
+        if before is None or after is None:
+            return None
+        if abs(after) > abs(before) + 0.05:
+            return None
+        if (
+            abs(after) > abs(before) - 0.15
+            and abs(after) >= self.DESKEW_MIN_ANGLE_DEG
+        ):
+            return None
         return rotated
 
     def _deskew_table_image(self, img: np.ndarray) -> np.ndarray:
@@ -630,7 +655,10 @@ class TableImageExtractor:
                 image_path=str(img_path),
             )
 
-        header_idx, headers, col_centers = self._extract_header_info(rows)
+        img_w = int(img.shape[1]) if img is not None else 0
+        header_idx, headers, col_centers = self._extract_header_info(
+            rows, img_width=img_w
+        )
         data_idx, data_cells = self._find_main_data_row(rows, header_idx)
         # 拍屏时同一数据行常被拆成多行，合并后再对齐
         data_cells = self._merge_fragmented_data_rows(rows, data_idx, header_idx)
@@ -648,7 +676,7 @@ class TableImageExtractor:
                     image_path=str(img_path),
                 )
             headers, col_centers = self._infer_headers_fallback(
-                rows, data_cells, img.shape[1]
+                rows, data_cells, img_w
             )
             if len(headers) < 4:
                 return TableExtractResult(
@@ -678,19 +706,20 @@ class TableImageExtractor:
             rows, header_idx, data_idx, headers, col_centers, col_count)
         matrix = self._postprocess_rows(matrix)
         # 用合并后的主数据行按 X 对齐（不顺序压列），覆盖末行拆碎错位
+        # 仅当主行确实像当前末行（或末行过稀）时覆盖，避免把第 2 行指标盖成第 3 行
         if matrix and data_cells:
             aligned = self._align_row_to_columns(
                 self._expand_row_cells(data_cells), col_centers, len(headers)
             )
-            if aligned and sum(1 for v in aligned if v) >= max(
-                4, sum(1 for v in matrix[-1] if v) // 2
-            ):
+            if aligned and self._should_overwrite_last_with_main(matrix, aligned):
                 matrix[-1] = [
-                    self._fix_decimal_ocr(v) if v else "" for v in aligned
+                    self.NODATA_MARK
+                    if v == self.NODATA_MARK
+                    else (self._fix_decimal_ocr(v) if v else "")
+                    for v in aligned
                 ]
-        # 先按 X 回填空格，再量级清理；清理掉的噪声格再局部 OCR（避免 410→110 被清后永远空着）
+        # 先按 X 回填空格，空格再局部 OCR；识别结果原样保留（异常值不置空）
         matrix = self._fill_sparse_data_row(matrix, data_cells, col_centers, col_count)
-        matrix = [self._sanitize_data_row(r) for r in matrix]
         matrix = self._refill_matrix_empties(
             img, matrix, rows, header_idx, data_idx, data_cells, col_centers
         )
@@ -703,7 +732,6 @@ class TableImageExtractor:
             img, matrix, rows, header_idx, data_idx, data_cells, col_centers
         )
         ocr_filled = self._count_numeric_cells(matrix)
-        matrix = [self._sanitize_data_row(r) for r in matrix]
         headers, matrix = self._trim_trailing_empty_and_broken_headers(
             headers, matrix
         )
@@ -723,9 +751,10 @@ class TableImageExtractor:
             header_idx=header_idx,
             data_cells=data_cells,
         )
-        # 漏点补救：5 位同行选优 → 4 位电价 d.ddd（6 位已在 _fix_decimal_ocr）
+        # 漏点补救：5 位、4 位都按同行锚点双候选选优（6 位已在 _fix_decimal_ocr）
         if self.fix_decimal_enabled:
             matrix = [self._apply_decimal_row_repairs(r) for r in matrix]
+        matrix = self._strip_nodata_marks(matrix)
         ocr_filled = self._count_numeric_cells(matrix)
 
         return TableExtractResult(
@@ -835,11 +864,18 @@ class TableImageExtractor:
         pad_y_top = int(min(row_est * 1.35, h * 0.06))
         pad_y_bot = max(6, int(bh * 0.08), int(h * 0.015))
         pad_x = max(6, int(bw * 0.015), int(w * 0.004))
-        x0 = max(0, x - pad_x)
+        # 左缘常因首列偏暗/半截漏检被啃掉一列；左侧多扩约 1 列宽
+        col_est = max(bw / 8.0, w * 0.09)
+        pad_x_left = max(pad_x, int(col_est * 0.95), int(w * 0.04))
+        pad_x_right = pad_x
+        x0 = max(0, x - pad_x_left)
         # 搜索从 50% 起；表头可略越过，但不得低于 48%（避免曲线）
         y0 = max(int(h * 0.48), y - pad_y_top)
-        x1 = min(w, x + bw + pad_x)
+        x1 = min(w, x + bw + pad_x_right)
         y1 = min(h, y + bh + pad_y_bot)
+        # 蓝带起点仍偏右（>4%）：再向左拉一列，避免首列时刻/电价被裁断
+        if x0 > int(w * 0.04):
+            x0 = max(0, int(x0 - col_est * 0.9))
         # 表通常接近全宽；偏窄时左右略扩（暗侧漏检时尤其需要）
         if (x1 - x0) < w * 0.70:
             mid = 0.5 * (x0 + x1)
@@ -893,11 +929,32 @@ class TableImageExtractor:
         x0, y0, x1, y1 = self.DEFAULT_TABLE_CROP_RATIO
         return img[int(h * y0) : int(h * y1), int(w * x0) : int(w * x1)]
 
+    def _demoire_table_gray(self, gray: np.ndarray) -> Optional[np.ndarray]:
+        """
+        表格轻量去摩尔纹：双边 + 频域低通，削弱拍屏网格竖纹。
+        只产一路变体，避免像日期 OCR 那样多通道拖慢整表。
+        """
+        try:
+            soft = cv2.bilateralFilter(gray, d=7, sigmaColor=50, sigmaSpace=50)
+            f = np.fft.fft2(soft.astype(np.float32))
+            fshift = np.fft.fftshift(f)
+            rows, cols = soft.shape
+            crow, ccol = rows // 2, cols // 2
+            mask = np.zeros((rows, cols), np.float32)
+            radius = max(14, min(rows, cols) // 7)
+            cv2.circle(mask, (ccol, crow), radius, 1.0, -1)
+            mask = cv2.GaussianBlur(mask, (0, 0), max(2.0, radius / 6.0))
+            img_back = np.fft.ifft2(np.fft.ifftshift(fshift * mask))
+            low = np.clip(np.abs(img_back), 0, 255).astype(np.uint8)
+            return cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8)).apply(low)
+        except Exception:
+            return None
+
     def _preprocess_variants(self, img: np.ndarray) -> List[Tuple[np.ndarray, float]]:
         """
         生成预处理图像，尽量保住小数点笔画。
 
-        通道：原图 → CLAHE/反色 →（浅色表）轻度放大锐化。
+        通道：原图 → CLAHE/反色 →（浅色表）轻度放大锐化 → 轻量去摩尔纹。
         返回 (图像, 相对原图的尺度)；放大通道 OCR 后须除以该尺度映射回原图坐标。
         """
         gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
@@ -923,6 +980,10 @@ class TableImageExtractor:
                 up, 1.35, cv2.GaussianBlur(up, (0, 0), 0.8), -0.35, 0
             )
             out.append((cv2.cvtColor(sharp, cv2.COLOR_GRAY2BGR), up_scale))
+        # 拍屏竖纹：多一路去摩尔纹，利于细小 0 / 小数点
+        demoire = self._demoire_table_gray(gray)
+        if demoire is not None and demoire.size:
+            out.append((cv2.cvtColor(demoire, cv2.COLOR_GRAY2BGR), 1.0))
         return out
 
     @staticmethod
@@ -1014,17 +1075,78 @@ class TableImageExtractor:
             - 1.5 * float(big)
         )
 
+    @staticmethod
+    def _raw_time_hour_digit_count(text: str) -> Optional[int]:
+        """OCR 原文小时位数；无法解析为时刻则 None。
+
+        界面完整列为零填充 HH:MM（如 01:15）。贴边裁断时常只剩 1:15，
+        小时仅 1 位——这类残片不得当成完整列。
+        """
+        raw = str(text or "").strip().replace("O", "0").replace("o", "0")
+        raw = raw.replace("l", "1").replace("I", "1").replace("|", "1")
+        raw = raw.replace("：", ":").replace("．", ".").replace(";", ":")
+        m = re.match(r"^(\d{1,2})[:：.\-](\d{2})(?:[:：]\d{2})?$", raw)
+        if m:
+            return len(m.group(1))
+        digits = re.sub(r"\D", "", raw)
+        if len(digits) == 4:
+            return 2
+        if len(digits) == 3:
+            # 115 → 可能是残缺的 1:15（缺分隔）
+            return 1
+        return None
+
+    @staticmethod
+    def _cell_touches_image_edge(
+        cell: OcrCell, img_width: int, *, pad_px: Optional[float] = None
+    ) -> bool:
+        """文本框是否贴齐画布左/右裁切线（半列被裁的典型信号）。"""
+        if img_width <= 0:
+            return False
+        pad = (
+            float(pad_px)
+            if pad_px is not None
+            else max(4.0, min(float(img_width) * 0.015, 14.0))
+        )
+        left = float(cell.x)
+        right = left + float(cell.width or 0)
+        return left <= pad or right >= float(img_width) - pad
+
     def _row_time_candidates(
-        self, row: Sequence[OcrCell]
+        self,
+        row: Sequence[OcrCell],
+        *,
+        img_width: int = 0,
     ) -> List[Tuple[str, float]]:
+        """收集行内时刻；贴边且小时非两位的残片直接丢弃。"""
         times: List[Tuple[str, float]] = []
+        widths = [float(c.width or 0) for c in row if c.width and c.width > 0]
+        med_w = float(np.median(widths)) if widths else 0.0
         for cell in row:
+            hour_digits = self._raw_time_hour_digit_count(cell.text)
+            touches = self._cell_touches_image_edge(cell, img_width)
+            # 贴边 + 小时非两位（1:15 / 115）→ 半列残片，不采纳
+            if touches and hour_digits is not None and hour_digits < 2:
+                continue
+            # 贴边且框明显偏窄（相对同行时刻框）→ 半列
+            if (
+                touches
+                and med_w > 8
+                and float(cell.width or 0) < med_w * 0.72
+                and hour_digits is not None
+            ):
+                continue
             norm = self._normalize_time(cell.text)
             if norm:
                 times.append((norm, cell.x + cell.width / 2))
         return times
 
-    def _extract_header_info(self, rows: Sequence[List[OcrCell]]) -> Tuple[int, List[str], List[float]]:
+    def _extract_header_info(
+        self,
+        rows: Sequence[List[OcrCell]],
+        *,
+        img_width: int = 0,
+    ) -> Tuple[int, List[str], List[float]]:
         """
         提取表头行、时间列名、列中心 X。
 
@@ -1036,7 +1158,7 @@ class TableImageExtractor:
         best_key: Tuple[float, float, float, int] = (-1e9, -1.0, -1.0, -1)
         best_times: List[Tuple[str, float]] = []
         for idx, row in enumerate(rows):
-            times = self._row_time_candidates(row)
+            times = self._row_time_candidates(row, img_width=img_width)
             if len(times) < 2:
                 continue
             ratio = len(times) / max(len(row), 1)
@@ -1083,7 +1205,7 @@ class TableImageExtractor:
                 if abs(self._row_y_center(row) - base_y) > y_tol:
                     continue
                 # 邻行若几乎全是大步时刻（曲线轴），勿并入
-                neigh = self._row_time_candidates(row)
+                neigh = self._row_time_candidates(row, img_width=img_width)
                 if not neigh:
                     continue
                 neigh_mins = [
@@ -1364,7 +1486,7 @@ class TableImageExtractor:
         img_width: int,
     ) -> Tuple[List[str], List[float]]:
         """表头行弱时：汇总偏下方、且步长像 15 分钟的时刻（不编造模板）。"""
-        del data_cells, img_width
+        del data_cells
         # 优先取图像下半的行，减少曲线轴
         scored_rows: List[Tuple[float, List[Tuple[str, float]]]] = []
         max_y = 1.0
@@ -1373,7 +1495,7 @@ class TableImageExtractor:
             if yc > max_y:
                 max_y = yc
         for row in rows:
-            times = self._row_time_candidates(row)
+            times = self._row_time_candidates(row, img_width=img_width)
             if len(times) < 3:
                 continue
             mins = [
@@ -1389,7 +1511,9 @@ class TableImageExtractor:
         if not scored_rows:
             times_all: List[Tuple[str, float]] = []
             for row in rows:
-                times_all.extend(self._row_time_candidates(row))
+                times_all.extend(
+                    self._row_time_candidates(row, img_width=img_width)
+                )
             dedup0 = self._dedupe_header_times_prefer_delta15(times_all, x_tol=25.0)
             if len(dedup0) < 4:
                 return [], []
@@ -1624,12 +1748,23 @@ class TableImageExtractor:
             ) / max(len(row), 1)
             row_mag = self._row_numeric_median(row)
             near_y = abs(row_y - base_y) <= y_tol
+            med_h = float(np.median([c.height for c in base])) if base else 28.0
+            # 摩尔纹双框常只差几个像素；电价行量级 < 20，不能再用 same_series 门槛
+            same_line = abs(row_y - base_y) <= max(10.0, med_h * 0.45)
+            dec_base = self._row_decimal_ratio(base)
+            dec_row = self._row_decimal_ratio(row)
+            same_kind = (dec_base >= 0.4 and dec_row >= 0.4) or (
+                dec_base <= 0.15 and dec_row <= 0.15
+            )
             same_series = (
                 base_mag >= 20
                 and row_mag >= 20
                 and abs(row_mag - base_mag) / max(base_mag, 1.0) <= 0.22
             )
-            if idx == data_idx or (near_y and numeric_ratio >= 0.5 and same_series):
+            if idx == data_idx or (
+                numeric_ratio >= 0.5
+                and ((near_y and same_series) or (same_line and same_kind))
+            ):
                 for c in row:
                     if self._normalize_time(c.text):
                         continue
@@ -1647,12 +1782,7 @@ class TableImageExtractor:
         dedup: List[OcrCell] = []
         for cell in merged:
             if dedup and abs(cell.x - dedup[-1].x) < 18:
-                prev = dedup[-1]
-                prefer_new = ("." in cell.text and "." not in prev.text) or (
-                    len(cell.text) > len(prev.text)
-                    and cell.confidence >= prev.confidence * 0.9
-                )
-                if prefer_new:
+                if self._better_ocr_cell(cell, dedup[-1]):
                     dedup[-1] = cell
                 continue
             dedup.append(cell)
@@ -2061,10 +2191,13 @@ class TableImageExtractor:
 
     @staticmethod
     def _edge_margin_px(img_width: int, step_x: float = 60.0) -> float:
-        """本图裁切半列窄带：仅贴齐画布边缘（双屏已切开，不再用大半列防邻屏）。"""
+        """本图裁切半列判定带：约 0.4 列宽（半列中心通常落在此内）。
+
+        完整贴边列中心约在 0.5×step 处，予以保留；被裁半列中心更靠外缘则丢弃。
+        """
         if img_width <= 0:
-            return max(8.0, step_x * 0.15)
-        return max(8.0, min(img_width * 0.01, step_x * 0.18))
+            return max(8.0, step_x * 0.35)
+        return max(8.0, min(img_width * 0.04, step_x * 0.40))
 
     def _drop_edge_clipped_columns(
         self,
@@ -2074,8 +2207,8 @@ class TableImageExtractor:
     ) -> Tuple[List[str], List[float]]:
         """丢掉本图边缘被裁断的半列。
 
-        只丢：中心已出画布，或落入极窄贴边带（表头几乎贴齐裁切线）。
-        靠外缘但中心仍在图内的完整列保留——不再用「半列理论越界」砍合法末列。
+        中心已出画布，或落入约 0.4 列宽的贴边带（半列中心典型位置）则丢弃。
+        完整列即便靠外缘，中心通常仍在约 0.5×列宽处，予以保留。
         """
         n = min(len(headers), len(col_centers))
         if n < 2 or img_width <= 0:
@@ -2315,10 +2448,7 @@ class TableImageExtractor:
                     dedup: List[OcrCell] = []
                     for cell in merged:
                         if dedup and abs(cell.x - dedup[-1].x) < 18:
-                            prev = dedup[-1]
-                            if ("." in cell.text and "." not in prev.text) or len(
-                                cell.text
-                            ) > len(prev.text):
+                            if self._better_ocr_cell(cell, dedup[-1]):
                                 dedup[-1] = cell
                             continue
                         dedup.append(cell)
@@ -2636,7 +2766,12 @@ class TableImageExtractor:
             if not aligned or not self._is_valid_data_row(aligned):
                 continue
             if self._row_is_mostly_zeros(aligned):
-                matrix.append(["0"] * col_count)
+                matrix.append(
+                    [
+                        self.NODATA_MARK if v == self.NODATA_MARK else "0"
+                        for v in aligned
+                    ]
+                )
             else:
                 matrix.append(aligned)
 
@@ -2649,14 +2784,18 @@ class TableImageExtractor:
                 replaced = False
                 for i, band in enumerate(bands[: len(matrix)]):
                     if self._is_same_indicator_fragment(band, merged_main):
-                        matrix[i] = main_aligned
+                        # 同线双框时 band 往往已经挑过更好的读数，主行更差则不覆盖
+                        if self._aligned_row_strength(main_aligned) > self._aligned_row_strength(
+                            matrix[i]
+                        ):
+                            matrix[i] = main_aligned
                         replaced = True
                         break
                 if not replaced:
                     for i, row in enumerate(matrix):
                         if self._aligned_rows_similar(row, main_aligned):
-                            if sum(1 for v in main_aligned if v) >= sum(
-                                1 for v in row if v
+                            if self._aligned_row_strength(main_aligned) > self._aligned_row_strength(
+                                row
                             ):
                                 matrix[i] = main_aligned
                             replaced = True
@@ -2754,13 +2893,156 @@ class TableImageExtractor:
             return 0.0
         return sum(1 for c in filled if "." in c) / len(filled)
 
+    def _row_looks_like_decimal_indicator(self, row: Sequence[str]) -> bool:
+        """
+        是否像独立的小数指标行（非「全 0/整型行里渗漏的几个小数」）。
+
+        现货表两种合法形态：
+        - 经典：前两行整型/全 0，末行电价小数；
+        - 新画面：三行指标均可为小数（如 15.x / 18.x / 9.x）。
+        """
+        filled = [str(c).strip() for c in row if c and str(c).strip()]
+        if len(filled) < 3:
+            return False
+        if self._row_is_mostly_zeros(list(row)):
+            return False
+        dec_n = sum(1 for c in filled if "." in c)
+        if dec_n / len(filled) < 0.4:
+            return False
+        # 排除「多数 0 + 偶发小数噪点」
+        zeroish = sum(
+            1
+            for c in filled
+            if c in ("0", "0.0", "-0", "-0.0", "O", "o", "D", "U")
+        )
+        return zeroish < len(filled) * 0.5
+
+    def _row_is_integerish_or_empty(self, row: Sequence[str]) -> bool:
+        """空行 / 全 0 / 以整型功率为主 → 可走经典电力-计划拆行逻辑。"""
+        filled = [str(c).strip() for c in row if c and str(c).strip()]
+        if not filled:
+            return True
+        if self._row_is_mostly_zeros(list(row)):
+            return True
+        if self._row_looks_like_decimal_indicator(row):
+            return False
+        int_n = 0
+        for s in filled:
+            body = s[1:] if s.startswith(("-", "−", "–")) else s
+            if s in ("0", "-0", "0.0", "-0.0", "O", "o", "D", "U"):
+                int_n += 1
+            elif "." not in s and re.fullmatch(r"-?\d{1,4}", s.replace("−", "-")):
+                int_n += 1
+            elif body in ("0", "0.0"):
+                int_n += 1
+        return int_n >= max(1, int(len(filled) * 0.55))
+
+    def _matrix_decimal_indicator_count(self, matrix: Sequence[Sequence[str]]) -> int:
+        return sum(1 for r in matrix if self._row_looks_like_decimal_indicator(r))
+
+    def _matrix_is_multi_decimal_indicators(
+        self, matrix: Sequence[Sequence[str]]
+    ) -> bool:
+        """≥2 条独立小数指标行 → 禁止「小数一律沉底/清上方」的经典电价假设。"""
+        return self._matrix_decimal_indicator_count(matrix) >= 2
+
+    def _aligned_rows_same_series(
+        self, a: Sequence[str], b: Sequence[str]
+    ) -> bool:
+        """
+        两行是否像同一指标（用于末行覆盖护栏）。
+
+        以同列值重叠为主；仅当一行明显更稀（残片补全）时才用量级接近兜底。
+        禁止仅凭「中位数都在 15–20」把两条独立小数指标判成同一行。
+        """
+        n = min(len(a), len(b))
+        if n <= 0:
+            return False
+        overlap = 0
+        compared = 0
+        filled_a = 0
+        filled_b = 0
+        for i in range(max(len(a), len(b))):
+            sa = str(a[i]).strip() if i < len(a) and a[i] else ""
+            sb = str(b[i]).strip() if i < len(b) and b[i] else ""
+            if sa:
+                filled_a += 1
+            if sb:
+                filled_b += 1
+            if i >= n or not sa or not sb:
+                continue
+            compared += 1
+            if sa == sb:
+                overlap += 1
+                continue
+            try:
+                fa, fb = float(sa), float(sb)
+            except ValueError:
+                continue
+            if abs(fa - fb) <= max(0.05, abs(fa) * 0.02):
+                overlap += 1
+        if compared >= 3 and overlap / compared >= 0.4:
+            return True
+        # 残片 vs 完整行：一稀一密且量级接近
+        sparse = min(filled_a, filled_b) <= max(
+            3, int(max(filled_a, filled_b) * 0.45)
+        )
+        if not sparse or max(filled_a, filled_b) < 4:
+            return False
+        ma = self._row_filled_median(list(a))
+        mb = self._row_filled_median(list(b))
+        if ma >= 5 and mb >= 5 and abs(ma - mb) / max(ma, mb, 1.0) <= 0.18:
+            return True
+        return False
+
+    def _should_overwrite_last_with_main(
+        self,
+        matrix: Sequence[Sequence[str]],
+        aligned: Sequence[str],
+    ) -> bool:
+        """
+        主数据行是否允许覆盖 matrix[-1]。
+
+        经典：末行稀/碎，主行可补全。
+        多小数指标：主行若其实是第 1/2 行，禁止盖掉真正的末行。
+        """
+        if not matrix or not aligned:
+            return False
+        last = list(matrix[-1])
+        last_n = sum(1 for v in last if v and str(v).strip())
+        main_n = sum(1 for v in aligned if v and str(v).strip())
+        if main_n < max(4, last_n // 2):
+            return False
+        # 主行更像上方某一已填指标行 → 绝不能盖/写入末行（即使末行空）
+        for upper in matrix[:-1]:
+            upper_n = sum(1 for v in upper if v and str(v).strip())
+            if upper_n >= 3 and self._aligned_rows_same_series(upper, aligned):
+                if last_n < 2 or not self._aligned_rows_same_series(last, aligned):
+                    return False
+        # 末行过稀且主行不像上方行：允许主行写入
+        if last_n < 4:
+            return True
+        # 末行已是更完整/更多小数的版本：禁止用较差主行盖掉
+        if self._aligned_row_strength(last) > self._aligned_row_strength(aligned):
+            return False
+        # 主行已像末行 → 可覆盖补全
+        if self._aligned_rows_same_series(last, aligned):
+            return True
+        # 多小数指标且末行已较满：保持 band 顺序，不做强制覆盖
+        if self._matrix_is_multi_decimal_indicators(matrix) and last_n >= 4:
+            return False
+        # 末行已有内容且与主行不像同一指标
+        if last_n >= 4 and not self._aligned_rows_same_series(last, aligned):
+            return False
+        return True
+
     def _pad_short_matrix_to_expected(
         self,
         matrix: List[List[str]],
         *,
         expected: int = 3,
     ) -> List[List[str]]:
-        """不足 expected 行时：小数行沉底，上方插入空/零行槽。"""
+        """不足 expected 行时：经典模式小数行沉底；多小数指标保持原序。"""
         if not matrix or len(matrix) >= expected:
             return matrix
         ncols = max((len(r) for r in matrix), default=0)
@@ -2773,16 +3055,28 @@ class TableImageExtractor:
 
         out = [_pad(r) for r in matrix]
         ratios = [self._row_decimal_fill_ratio(r) for r in out]
+        # 仅「上方整型/全0 + 唯一小数电价」时才把小数沉底；多小数指标保 Y 序
         price_i = max(range(len(out)), key=lambda i: (ratios[i], i))
-        if ratios[price_i] >= 0.25 and price_i != len(out) - 1:
+        classic_sink = (
+            ratios[price_i] >= 0.25
+            and price_i != len(out) - 1
+            and not self._matrix_is_multi_decimal_indicators(out)
+        )
+        if classic_sink:
             price = out.pop(price_i)
             out.append(price)
             ratios = [self._row_decimal_fill_ratio(r) for r in out]
 
         empty_slot = [""] * ncols
         while len(out) < expected:
-            # 有电价特征则插在末行之上；否则插到顶部
-            if ratios and ratios[-1] >= 0.25:
+            # 经典电价在底：空槽插在末行之上；多小数/无电价特征：插顶部
+            if (
+                ratios
+                and ratios[-1] >= 0.25
+                and not self._matrix_is_multi_decimal_indicators(
+                    [r for r in out if any(str(c).strip() for c in r)]
+                )
+            ):
                 out.insert(len(out) - 1, list(empty_slot))
             else:
                 out.insert(0, list(empty_slot))
@@ -2795,8 +3089,8 @@ class TableImageExtractor:
         """
         拆开混行的电力/计划（整型）与电价（小数）。
 
-        业务固定 3 行：前两行应为整数功率/计划，末行电价带小数。
-        斜拍/粘连时小数会渗进第 2 行、整数渗进第 3 行。
+        经典形态：前两行整型/全 0，末行电价带小数；斜拍时小数渗进第 2 行。
+        新画面：多行独立小数指标 → 原样保留，禁止把上方小数清成 0。
         """
         if not matrix or len(matrix) < 2:
             return matrix
@@ -2805,11 +3099,7 @@ class TableImageExtractor:
         out = [r + [""] * (ncols - len(r)) for r in out]
 
         def _dec_ratio(row: Sequence[str]) -> float:
-            filled = [str(c).strip() for c in row if c and str(c).strip()]
-            if not filled:
-                return 0.0
-            dec = sum(1 for c in filled if "." in c)
-            return dec / len(filled)
+            return self._row_decimal_fill_ratio(row)
 
         def _looks_price(cell: str) -> bool:
             s = str(cell or "").strip().replace("−", "-")
@@ -2827,9 +3117,13 @@ class TableImageExtractor:
                 return True
             return bool(re.fullmatch(r"-?\d{1,4}", s)) and "." not in s
 
+        # ≥2 条小数指标：保持行序与内容，不做「小数归末行」重分
+        if self._matrix_is_multi_decimal_indicators(out):
+            return out
+
         ratios = [_dec_ratio(r) for r in out]
         price_i = max(range(len(out)), key=lambda i: (ratios[i], i))
-        # 小数行沉底
+        # 小数行沉底（仅经典单电价）
         if price_i != len(out) - 1 and ratios[price_i] >= 0.25:
             out[price_i], out[-1] = out[-1], out[price_i]
             ratios[price_i], ratios[-1] = ratios[-1], ratios[price_i]
@@ -2837,15 +3131,21 @@ class TableImageExtractor:
         # 逐列重分：小数归电价，整型归上方行；电价行已有小数优先保留（避免污染值盖掉真电价）
         price = list(out[-1])
         int_rows = [list(r) for r in out[:-1]]
+        # 上方若已是独立小数指标，格子保留（防漏判 multi 时误清）
+        upper_keep_decimal = [
+            self._row_looks_like_decimal_indicator(r) for r in int_rows
+        ]
         for ci in range(ncols):
             leaked_prices: List[str] = []
             int_pool: List[str] = []
-            for row in int_rows:
+            for ri, row in enumerate(int_rows):
                 cur = row[ci] if ci < len(row) else ""
                 s = str(cur).strip() if cur else ""
                 if not s:
                     continue
                 if _looks_price(s):
+                    if upper_keep_decimal[ri]:
+                        continue
                     leaked_prices.append(s)
                     row[ci] = ""
                 elif _looks_power_int(s):
@@ -2876,6 +3176,8 @@ class TableImageExtractor:
             # 整型行空格：用同列整型池回填（电力≈计划时可共享）
             if int_pool:
                 for ri, row in enumerate(int_rows):
+                    if upper_keep_decimal[ri]:
+                        continue
                     cur = row[ci] if ci < len(row) else ""
                     if cur and str(cur).strip():
                         continue
@@ -2886,7 +3188,9 @@ class TableImageExtractor:
 
         # 护栏：整型行被电价碎片掏空后不得留整行空（现货前两行常为 0）
         price_dec = _dec_ratio(price)
-        for row in int_rows:
+        for ri, row in enumerate(int_rows):
+            if upper_keep_decimal[ri]:
+                continue
             if any(str(c).strip() for c in row):
                 continue
             if price_dec >= 0.25:
@@ -2985,6 +3289,30 @@ class TableImageExtractor:
         cy = float(ys.mean()) / max(gray.shape[0], 1)
         return 0.22 <= cx <= 0.78 and 0.18 <= cy <= 0.82
 
+    def _trailing_nodata_columns(
+        self, matrix: Sequence[Sequence[str]], ncols: int
+    ) -> set:
+        """
+        末段「未出清」列：以电价行（末行）为准，最后一个有值时刻之后的列。
+
+        业务：0=该时刻真实零值（写 PI）；-=尚未到点/无数据（置空、不写 PI）。
+        屏上未出清时三行同为 -；电价行空而电力行被误补成 0 时，仍按电价行截断。
+        电价行完全无值时不判定（避免整表失败误杀）。
+        """
+        if not matrix or ncols <= 0:
+            return set()
+        price = (list(matrix[-1]) + [""] * max(0, ncols - len(matrix[-1])))[
+            :ncols
+        ]
+        last_filled = -1
+        for c, raw in enumerate(price):
+            s = str(raw).strip() if raw is not None else ""
+            if s and s != "-" and s != self.NODATA_MARK:
+                last_filled = c
+        if last_filled < 0:
+            return set()
+        return set(range(last_filled + 1, ncols))
+
     def _fill_row_by_column_zero_ocr(
         self,
         img: np.ndarray,
@@ -2993,20 +3321,29 @@ class TableImageExtractor:
         y0: float,
         y1: float,
         yc: float,
+        nodata_cols: Optional[set] = None,
     ) -> List[str]:
         """
         补全电力/计划行空格为 0。
 
         整图检测常漏单字 0；单列 OCR 又易把竖线读成 1/16。
         保留整图已写入的非空格；空格填 0（可用墨点确认，结果相同）。
+        未出清列（nodata_cols，屏上 -）保持空，禁止补 0。
         非零功率只信任整图 OCR，不在此路径臆造。
         """
         del img, y0, y1, yc  # 签名保留供几何带调用；先验填 0 无需再 OCR
+        skip = nodata_cols or set()
         ncols = len(col_centers)
         out = list(row) + [""] * max(0, ncols - len(row))
         out = out[:ncols]
         for ci in range(ncols):
+            if ci in skip:
+                out[ci] = ""
+                continue
             cur = str(out[ci]).strip() if out[ci] else ""
+            if cur == self.NODATA_MARK:
+                out[ci] = self.NODATA_MARK
+                continue
             if cur:
                 if cur in ("O", "o", "D", "U"):
                     out[ci] = "0"
@@ -3029,6 +3366,7 @@ class TableImageExtractor:
 
         锚点：时刻表头 Y（无行名依赖，横向滚动后仍可用）。
         电价行保持末行；上方行空/过稀则补 0，并清除多数零行里的 1/2 噪点。
+        末段未出清（-）列不补 0，置空以便 PI 跳过。
         """
         if not col_centers:
             return matrix
@@ -3041,72 +3379,198 @@ class TableImageExtractor:
         out = [list(r) + [""] * max(0, ncols - len(r)) for r in matrix]
         out = [r[:ncols] for r in out]
 
-        # 确保小数行在底部
+        # 经典单电价：小数沉底。多小数指标行保持 band/Y 序，禁止互调
         ratios = [self._row_decimal_fill_ratio(r) for r in out]
         price_i = max(range(len(out)), key=lambda i: (ratios[i], i))
-        if ratios[price_i] >= 0.25 and price_i != len(out) - 1:
+        if (
+            ratios[price_i] >= 0.25
+            and price_i != len(out) - 1
+            and not self._matrix_is_multi_decimal_indicators(out)
+        ):
             out[price_i], out[-1] = out[-1], out[price_i]
+
+        nodata_cols = self._trailing_nodata_columns(out, ncols)
 
         header_y, row_h = self._resolve_header_anchor_y(
             rows, header_idx, data_cells, img.shape[0], out, col_centers
         )
         bands = self._geometric_data_band_centers(header_y, row_h, img.shape[0])
 
-        # 仅处理电价之上的行
+        # 仅处理电价之上的行；独立小数指标行不补 0、不按零行降噪
         upper_n = max(0, len(out) - 1)
         for ri in range(upper_n):
             row = out[ri]
+            if self._row_looks_like_decimal_indicator(row):
+                continue
             filled = sum(1 for v in row if v and str(v).strip())
             empty_n = ncols - filled
             mostly_zero = self._row_is_mostly_zeros(row)
             # 已满且明显非零功率行 → 不动
             if empty_n <= 0 and not mostly_zero:
                 # 仍可能是「多数 0 + 少数 1 噪点」
-                out[ri] = self._coerce_zero_row_ocr_noise(row)
+                out[ri] = self._coerce_zero_row_ocr_noise(
+                    row, nodata_cols=nodata_cols
+                )
                 continue
             if empty_n <= 0 and mostly_zero:
-                out[ri] = self._coerce_zero_row_ocr_noise(row)
+                out[ri] = self._coerce_zero_row_ocr_noise(
+                    row, nodata_cols=nodata_cols
+                )
                 continue
             need = empty_n >= max(1, int(ncols * 0.25)) or mostly_zero or filled == 0
             if not need:
-                out[ri] = self._coerce_zero_row_ocr_noise(row)
+                out[ri] = self._coerce_zero_row_ocr_noise(
+                    row, nodata_cols=nodata_cols
+                )
                 continue
             y0, y1, yc = bands[ri] if ri < len(bands) else bands[-1]
             filled_row = self._fill_row_by_column_zero_ocr(
-                img, row, col_centers, y0, y1, yc
+                img, row, col_centers, y0, y1, yc, nodata_cols=nodata_cols
             )
-            out[ri] = self._coerce_zero_row_ocr_noise(filled_row)
+            out[ri] = self._coerce_zero_row_ocr_noise(
+                filled_row, nodata_cols=nodata_cols
+            )
+
+        # 未出清列：上两行即使误读成 0 也强制置空（与电价行空一致，不写 PI）
+        if nodata_cols:
+            for ri in range(upper_n):
+                if self._row_looks_like_decimal_indicator(out[ri]):
+                    continue
+                for ci in nodata_cols:
+                    if ci < len(out[ri]):
+                        out[ri][ci] = ""
+            for ci in nodata_cols:
+                if ci < len(out[-1]):
+                    out[-1][ci] = ""
 
         return out
 
-    def _coerce_zero_row_ocr_noise(self, row: Sequence[str]) -> List[str]:
+    # 拍屏摩尔纹/竖线易把 0 读成这些；在疑似全 0 行里一律压回 0
+    _MOIRE_ZERO_NOISE_TOKENS = frozenset(
+        {
+            "1",
+            "2",
+            "4",
+            "7",
+            "11",
+            "16",
+            "17",
+            "71",
+            "111",
+            "110",
+            "101",
+            "011",
+            "01",
+            "10",
+            "l",
+            "I",
+            "|",
+            "ll",
+            "II",
+        }
+    )
+
+    def _is_moire_zero_noise_token(self, s: str) -> bool:
+        """单元格是否像「全 0 行」上的摩尔纹假读。"""
+        t = str(s or "").strip()
+        if not t:
+            return True
+        if t in ("0", "0.0", "-0", "-0.0", "O", "o", "D", "U"):
+            return True
+        if t in self._MOIRE_ZERO_NOISE_TOKENS:
+            return True
+        if "." in t:
+            return False
+        try:
+            fv = abs(float(t))
+        except ValueError:
+            return True
+        # 无小数且极小的整数，常见于格线误读
+        return fv <= 4.0
+
+    def _row_looks_like_moire_zero_junk(self, row: Sequence[str]) -> bool:
         """
-        多数为 0 的行里，把整图误读的 1/2… 等噪点压回 0。
-        真功率行（非零占多数或量级 ≥10）不改。
+        电力/计划行是否像「本应全 0、却被摩尔纹填成 11/4/1/111」。
+        用于判断 fixed 是否够格跳过 auto，以及零行压噪。
+        真·全 0 行不算垃圾（否则 fixed 永不够格，开启 auto 时总会再跑一轮）。
         """
+        cells = [str(v).strip() if v else "" for v in row]
+        if not cells:
+            return False
+        if any("." in c for c in cells if c):
+            return False
+        filled = [c for c in cells if c]
+        if len(filled) < 3:
+            return False
+        zero_like = ("0", "0.0", "-0", "-0.0", "O", "o", "D", "U")
+        # 已出清且全是 0：正常电力/计划行，不是摩尔纹垃圾
+        if all(c in zero_like for c in filled):
+            return False
+        junk_n = sum(1 for c in filled if self._is_moire_zero_noise_token(c))
+        if junk_n < max(3, int(len(filled) * 0.5)):
+            return False
+        # 真功率行数值更分散且量级通常 >10、彼此接近；垃圾行常夹杂 0 与 11/111
+        try:
+            vals = [abs(float(c)) for c in filled]
+        except ValueError:
+            return True
+        med = float(np.median(vals)) if vals else 0.0
+        # 中位很小，或 max 相对中位离谱（如 0,0,0,111）
+        if med <= 5.0:
+            return True
+        mx = max(vals) if vals else 0.0
+        return mx >= max(50.0, med * 8.0) and junk_n >= len(filled) * 0.4
+
+    def _coerce_zero_row_ocr_noise(
+        self, row: Sequence[str], nodata_cols: Optional[set] = None
+    ) -> List[str]:
+        """
+        疑似全 0 的电力/计划行：把摩尔纹误读（1/4/11/111…）压回 0。
+        真功率行（带小数，或非噪点数值占多数且量级正常）不改。
+        未出清列（空 / -）保持空，禁止压成 0。
+        """
+        skip = nodata_cols or set()
         out = [str(v).strip() if v else "" for v in row]
         n = len(out)
         if n <= 0:
             return out
 
         def _is_zero_token(s: str) -> bool:
-            return s in ("", "0", "0.0", "-0", "-0.0", "O", "o", "D", "U")
+            return s in ("0", "0.0", "-0", "-0.0", "O", "o", "D", "U")
 
-        zero_n = sum(1 for s in out if _is_zero_token(s))
-        if zero_n < n * 0.5:
-            return list(out)
+        zero_n = sum(1 for s in out if _is_zero_token(s) or s == "")
+        junk_n = sum(1 for s in out if s and self._is_moire_zero_noise_token(s))
+        looks_junk = self._row_looks_like_moire_zero_junk(out)
+        # 触发：≥30% 真 0，或 ≥50% 为零/噪点，或整体像摩尔纹垃圾行
+        if not looks_junk and zero_n < n * 0.3 and junk_n < n * 0.5:
+            cleaned = list(out)
+            for ci in skip:
+                if 0 <= ci < len(cleaned):
+                    cleaned[ci] = ""
+            return cleaned
 
         cleaned: List[str] = []
-        for s in out:
-            if _is_zero_token(s):
+        for ci, s in enumerate(out):
+            if s == self.NODATA_MARK:
+                cleaned.append(self.NODATA_MARK)
+                continue
+            if ci in skip or s == "" or s == "-":
+                cleaned.append("")
+                continue
+            if _is_zero_token(s) or self._is_moire_zero_noise_token(s):
                 cleaned.append("0")
+                continue
+            if "." in s:
+                # 小数不该出现在电力/计划零行；整行 junk 时压掉，否则保留
+                cleaned.append("0" if looks_junk else s)
                 continue
             try:
                 fv = abs(float(s))
             except ValueError:
                 cleaned.append("0")
                 continue
-            if "." in s or fv < 10:
+            # 疑似零行：连 ≥10 的 11/111 也清掉；仅保留看起来像真功率的值
+            if looks_junk or fv < 20:
                 cleaned.append("0")
             else:
                 cleaned.append(s)
@@ -3132,6 +3596,12 @@ class TableImageExtractor:
         digits = len(re.sub(r"\D", "", t))
         return (has_dot, digits, float(confidence))
 
+    def _better_ocr_cell(self, new: OcrCell, prev: OcrCell) -> bool:
+        """同位置双框：带小数点、位数更多、置信度更高者优先。"""
+        return self._token_quality(new.text, new.confidence) > self._token_quality(
+            prev.text, prev.confidence
+        )
+
     def _filter_overlap_noise_cells(self, row: List[OcrCell]) -> List[OcrCell]:
         """过滤同行内明显重叠/噪声的 OCR 块，保留质量更高者。"""
         if len(row) <= 1:
@@ -3150,6 +3620,22 @@ class TableImageExtractor:
                 continue
             kept.append(cell)
         return kept
+
+    def _is_lone_dash(self, text: str) -> bool:
+        """整格只有横杠、没有数字（未出清）。负数如 -2.3 不是。"""
+        t = str(text or "").strip()
+        if not t or t == self.NODATA_MARK:
+            return t == self.NODATA_MARK
+        for ch in ("−", "–", "—", "﹣", "－", "­"):
+            t = t.replace(ch, "-")
+        return bool(t) and set(t) <= {"-"} and not re.search(r"\d", t)
+
+    def _strip_nodata_marks(self, matrix: List[List[str]]) -> List[List[str]]:
+        """无数据标记落成空字符串，供展示与 PI 跳过。"""
+        return [
+            ["" if c == self.NODATA_MARK else c for c in row]
+            for row in matrix
+        ]
 
     def _align_row_to_columns(self, row: List[OcrCell],
                               col_centers: List[float],
@@ -3171,6 +3657,24 @@ class TableImageExtractor:
 
         for cell in self._filter_overlap_noise_cells(row):
             covered = self._columns_covered_by_cell(cell, col_centers, step)
+            # 单列整格只有「-」：记为无数据，禁止后续单列重识
+            if self._is_lone_dash(cell.text):
+                target = covered[0] if len(covered) == 1 else None
+                if target is None and cell.width <= step * 1.35:
+                    cx = float(cell.x + max(cell.width, 1) / 2.0)
+                    col = min(
+                        range(col_count),
+                        key=lambda j: abs(cx - float(col_centers[j])),
+                    )
+                    if abs(cx - float(col_centers[col])) <= max_dist:
+                        target = col
+                if (
+                    target is not None
+                    and not values[target]
+                ):
+                    values[target] = self.NODATA_MARK
+                    qualities[target] = (-1, 0, 0.0)
+                continue
             # 宽框多列粘连：先试均衡文本拆；成功则落入覆盖列，失败才留空给几何重识
             if len(covered) >= 2 and self._looks_like_multicolumn_glue_text(cell.text):
                 parts = self._split_cell_values(cell.text)
@@ -3247,7 +3751,12 @@ class TableImageExtractor:
             if self._is_monster_numeric_token(val):
                 return
             q = self._token_quality(val, cell.confidence)
-            if not values[col] or q > qualities[col]:
+            # 无数据标记可被真实数值覆盖
+            if (
+                not values[col]
+                or values[col] == self.NODATA_MARK
+                or q > qualities[col]
+            ):
                 values[col] = val
                 qualities[col] = q
 
@@ -3311,11 +3820,18 @@ class TableImageExtractor:
         )
         out = [list(r) for r in matrix]
         img_w = img.shape[1]
+        ncols = len(col_centers)
+        # 末段未出清（-）列：跳过单列 OCR，避免对空/横杠狂重识拖垮耗时
+        nodata_cols = self._trailing_nodata_columns(out, ncols)
         # 从末行往前（电价行最易粘连漏识）
         order = list(range(len(out) - 1, -1, -1))
         for ri in order:
             row = out[ri]
-            empty_n = sum(1 for v in row if not v)
+            empty_n = sum(
+                1
+                for i, v in enumerate(row)
+                if (not v) and i not in nodata_cols
+            )
             if empty_n <= 0:
                 continue
             band = bands[ri] if ri < len(bands) else (
@@ -3338,6 +3854,13 @@ class TableImageExtractor:
                     )
                 ]
             is_price_row = ri == len(out) - 1
+            # 电力/计划行空得多：禁止局部 OCR（竖纹易读成 11/1/111），
+            # 留给 _recover_leading_zero_data_rows 用先验填 0
+            if (
+                not is_price_row
+                and empty_n >= max(2, int(len(row) * 0.35))
+            ):
+                continue
             # 空格很多时：末行仍全量局部重识；其它行只补尾部，避免拖垮
             if empty_n > max(8, int(len(row) * 0.45)) and not is_price_row:
                 out[ri] = self._override_tail_by_cell_ocr(
@@ -3351,6 +3874,7 @@ class TableImageExtractor:
                 band,
                 img_w,
                 prefer_sharp=is_price_row,
+                skip_cols=nodata_cols,
             )
         return out
 
@@ -3407,7 +3931,7 @@ class TableImageExtractor:
             row = out[ri]
             cleared = list(row)
             for j in sticky_cols:
-                if j < len(cleared):
+                if j < len(cleared) and cleared[j] != self.NODATA_MARK:
                     cleared[j] = ""
             band = bands[ri] if ri < len(bands) and bands[ri] else data_cells
             filled = self._ocr_fill_empty_cells(
@@ -3506,7 +4030,8 @@ class TableImageExtractor:
         sus = [
             i
             for i in range(len(row))
-            if self._is_suspicious_price_cell(row, i, small_med, med_int)
+            if row[i] != self.NODATA_MARK
+            and self._is_suspicious_price_cell(row, i, small_med, med_int)
         ]
         if not sus:
             return out
@@ -3518,9 +4043,22 @@ class TableImageExtractor:
             band = data_cells
         if not band:
             return out
+        short = [
+            i
+            for i in sus
+            if "." not in str(row[i])
+            and re.fullmatch(r"\d{2,3}", re.sub(r"\D", "", str(row[i]).lstrip("-")))
+        ]
+        # 2～3 位无点：竖纹抑制后按邻格量级择优，不用通用重识（通用通道会偏向无点高置信错读）
+        if short:
+            row = self._reread_short_price_integers(img, row, col_centers, band)
+        rest = [i for i in sus if i not in short]
+        if not rest:
+            out[ri] = row
+            return out
         # 先置空再走局部 OCR（强制覆盖）
         cleared = list(row)
-        for i in sus:
+        for i in rest:
             cleared[i] = ""
         filled = self._ocr_fill_empty_cells(
             img,
@@ -3531,12 +4069,164 @@ class TableImageExtractor:
             prefer_sharp=True,
         )
         # 重识成功则覆盖；极端离谱且重识失败 → 置空（宁缺毋滥，避免 193/969.307 落库）
-        for i in sus:
+        for i in rest:
             if filled[i]:
                 row[i] = filled[i]
-            elif self._extreme_price_outlier(row[i], small_med):
+            elif self._extreme_price_outlier(str(out[ri][i]), small_med):
                 row[i] = ""
         out[ri] = row
+        return out
+
+    def _suppress_vertical_stripes(self, gray: np.ndarray) -> np.ndarray:
+        """削弱拍屏竖向周期条纹，尽量留下数字笔画和小数点。"""
+        try:
+            f = np.fft.fft2(gray.astype(np.float32))
+            fshift = np.fft.fftshift(f)
+            rows, cols = gray.shape[:2]
+            crow = rows // 2
+            ccol = cols // 2
+            mask = np.ones((rows, cols), np.float32)
+            yband = max(3, rows // 18)
+            xkeep = max(2, cols // 80) * 3
+            mask[crow - yband : crow + yband, :] = 0.15
+            mask[crow - yband : crow + yband, ccol - xkeep : ccol + xkeep] = 1.0
+            mask = cv2.GaussianBlur(mask, (0, 0), 1.2)
+            back = np.fft.ifft2(np.fft.ifftshift(fshift * mask))
+            return np.clip(np.abs(back), 0, 255).astype(np.uint8)
+        except Exception:
+            return gray
+
+    def _price_dot_forms(self, text: str) -> List[str]:
+        """把单格读数展开成可与邻格比较的小数形态。已有小数点则原样保留。"""
+        s = str(text or "").strip().replace("−", "-").replace("–", "-").replace("—", "-")
+        if not s or s in ("-", "0", "-0"):
+            return []
+        sign = "-" if s.startswith("-") else ""
+        body = s[1:] if sign else s
+        if re.fullmatch(r"\d{1,3}\.\d{1,3}", body):
+            return [sign + body]
+        digits = re.sub(r"\D", "", body)
+        if not re.fullmatch(r"\d+", digits or ""):
+            return []
+        # 2 位不猜点（67→6.7 太容易伤到真实整数）；3 位给 xx.x / x.xx
+        if len(digits) == 3:
+            return [sign + digits[:2] + "." + digits[2:], sign + digits[0] + "." + digits[1:]]
+        if len(digits) == 4:
+            return [sign + digits[0] + "." + digits[1:]]
+        return []
+
+    def _reread_short_price_integers(
+        self,
+        img: np.ndarray,
+        row: List[str],
+        col_centers: List[float],
+        band: Sequence[OcrCell],
+    ) -> List[str]:
+        """
+        电价行 2～3 位无点整数：抑制竖纹后重识，只在更贴近左右邻格时覆盖。
+
+        62.4 被读成 67、28.5 被读成 111、15.2 被读成 152 时，竖纹滤掉后常见 624 / 28.5 / 152。
+        用邻格相对误差选 xx.x 或 x.xx；对不上邻格就保留原文。
+        """
+        if not row or not band or not col_centers:
+            return row
+        targets = [
+            i
+            for i, cell in enumerate(row)
+            if "." not in str(cell)
+            and re.fullmatch(r"-?\d{2,3}", str(cell).strip().replace("−", "-").replace("–", "-"))
+        ]
+        if not targets:
+            return row
+        ys = [c.y + c.height / 2 for c in band]
+        hs = [c.height for c in band if c.height and c.height > 0]
+        y_med = float(np.median(ys))
+        h_med = float(np.median(hs)) if hs else 40.0
+        y0 = int(max(0, y_med - h_med * 1.15))
+        y1 = int(min(img.shape[0], y_med + h_med * 1.15))
+        bounds = self._column_bounds(col_centers, img.shape[1])
+        # 锚点看原始行，避免同一行多个错格互相带偏
+        base = list(row)
+        out = list(row)
+        ocr = self._get_ocr()
+        for col in targets:
+            if col >= len(bounds):
+                continue
+            x0, x1 = bounds[col]
+            span = max(8, x1 - x0)
+            pad = max(2, int(span * 0.06))
+            rx0 = max(0, x0 - pad)
+            rx1 = min(img.shape[1], x1 + pad)
+            if rx1 - rx0 < 12 or y1 - y0 < 12:
+                continue
+            crop = img[y0:y1, rx0:rx1]
+            gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
+            notch = self._suppress_vertical_stripes(gray)
+            notch = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(4, 4)).apply(notch)
+            tight0 = max(0, x0 + max(1, int(span * 0.04)))
+            tight1 = min(img.shape[1], x1 - max(1, int(span * 0.04)))
+            variants = [cv2.cvtColor(notch, cv2.COLOR_GRAY2BGR)]
+            up = cv2.resize(notch, None, fx=2.5, fy=2.5, interpolation=cv2.INTER_CUBIC)
+            variants.append(cv2.cvtColor(up, cv2.COLOR_GRAY2BGR))
+            if tight1 - tight0 >= 12:
+                tight = img[y0:y1, tight0:tight1]
+                tg = cv2.cvtColor(tight, cv2.COLOR_BGR2GRAY)
+                tn = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(4, 4)).apply(
+                    self._suppress_vertical_stripes(tg)
+                )
+                variants.append(
+                    cv2.cvtColor(
+                        cv2.resize(tn, None, fx=2.5, fy=2.5, interpolation=cv2.INTER_CUBIC),
+                        cv2.COLOR_GRAY2BGR,
+                    )
+                )
+            # 整图 OCR 往往已经读对各位（624/285/152），只是丢了小数点
+            readings: List[str] = [str(base[col]).strip()]
+            for variant in variants:
+                result, _ = ocr(variant)
+                if not result:
+                    continue
+                for item in result:
+                    norm = self._normalize_cell_value(str(item[1]))
+                    if norm and norm not in ("0", "0.0"):
+                        readings.append(norm)
+            anchors: List[float] = []
+            for nb in (col - 1, col + 1):
+                if 0 <= nb < len(base):
+                    fv = self._parse_dotted_cell_value(str(base[nb]))
+                    if fv is not None:
+                        anchors.append(fv)
+            if len(anchors) < 1:
+                dotted = [
+                    self._parse_dotted_cell_value(str(c))
+                    for j, c in enumerate(base)
+                    if j != col
+                ]
+                dotted_f = [v for v in dotted if v is not None and v < 80.0]
+                if dotted_f:
+                    anchors.append(float(np.median(dotted_f)))
+            if not anchors:
+                continue
+            orig_rel = self._rel_err_to_anchors(abs(float(base[col])), anchors)
+            best_text = ""
+            best_rel = orig_rel
+            seen = set()
+            for reading in readings:
+                for form in self._price_dot_forms(reading):
+                    if form in seen or "." not in form:
+                        continue
+                    seen.add(form)
+                    try:
+                        fv = abs(float(form))
+                    except ValueError:
+                        continue
+                    rel = self._rel_err_to_anchors(fv, anchors)
+                    if rel < best_rel:
+                        best_rel = rel
+                        best_text = form
+            # 必须是小数，且明显比原文更靠近邻格；0.40 挡住 111→11.1 这种乱插点
+            if best_text and best_rel <= 0.40 and best_rel + 0.05 < orig_rel:
+                out[col] = best_text
         return out
 
     def _extreme_price_outlier(self, raw: str, small_med: float) -> bool:
@@ -3597,8 +4287,12 @@ class TableImageExtractor:
             result, _ = ocr(variant)
             if not result:
                 continue
+            saw_dash = False
             for item in result:
                 box, text, score = item[0], str(item[1]).strip(), float(item[2])
+                if self._is_lone_dash(text):
+                    saw_dash = True
+                    continue
                 norm = self._normalize_cell_value(text)
                 if not norm:
                     continue
@@ -3612,6 +4306,9 @@ class TableImageExtractor:
                     best_cx = rx0 + (min(xs) + max(xs)) / 2.0 * scale_x
             if best_key[0] == 1 and best_key[2] >= 3.0:
                 return best_text, best_cx
+            # 本变体只认出「-」：置空并停止其余预处理，不再当漏识重试
+            if saw_dash and not best_text:
+                return self.NODATA_MARK, None
         return best_text, best_cx
 
     def _cell_ocr_variants(self, crop: np.ndarray,
@@ -3644,6 +4341,7 @@ class TableImageExtractor:
         *,
         prefer_sharp: bool = False,
         trust_cell_ocr: bool = False,
+        skip_cols: Optional[set] = None,
     ) -> List[str]:
         """
         对数据行空单元格局部 OCR 补全。
@@ -3651,10 +4349,14 @@ class TableImageExtractor:
         紧裁优先；若检出文本中心更靠近邻列中心，则丢弃（防后列前移补位）。
         prefer_sharp：电价行空格优先用非 fast（锐化/二值）利于小数点。
         trust_cell_ocr：信任单列 OCR 原文（几何粘连重识用），不做同行量级过滤。
+        skip_cols：未出清列等，跳过单列 OCR。
         """
         if not row or not data_cells:
             return row
-        empty_cols = [i for i, v in enumerate(row) if not v]
+        skip = skip_cols or set()
+        empty_cols = [
+            i for i, v in enumerate(row) if (not v) and i not in skip
+        ]
         if not empty_cols:
             return row
 
@@ -3711,6 +4413,8 @@ class TableImageExtractor:
                 cand, found_x = self._ocr_single_cell_located(
                     img, ax0, ay0, ax1, ay1, fast=fast
                 )
+                if cand == self.NODATA_MARK:
+                    break
                 if not cand:
                     continue
                 if found_x is not None and len(col_centers) > 1:
@@ -3994,11 +4698,7 @@ class TableImageExtractor:
         """
         用主数据行 OCR 结果回填矩阵最后一行的空单元格。
 
-        @param rows        当前矩阵
-        @param data_cells  主数据行 OCR
-        @param col_centers 列中心
-        @param col_count   列数
-        @return 补全后的矩阵
+        主行须像末行；若主行更像上方指标，禁止把第 2 行值填进第 3 行空格。
         """
         if not rows or not data_cells:
             return rows
@@ -4006,11 +4706,24 @@ class TableImageExtractor:
             self._expand_row_cells(data_cells), col_centers, col_count)
         if not ref:
             return rows
-        target = rows[-1]
+        last = list(rows[-1]) + [""] * max(0, col_count - len(rows[-1]))
+        last = last[:col_count]
+        last_n = sum(1 for v in last if v and str(v).strip())
+        same_as_last = last_n >= 2 and self._aligned_rows_same_series(last, ref)
+        matches_upper = False
+        for upper in rows[:-1]:
+            upper_n = sum(1 for v in upper if v and str(v).strip())
+            if upper_n >= 3 and self._aligned_rows_same_series(upper, ref):
+                matches_upper = True
+                break
+        if matches_upper and not same_as_last:
+            return rows
+        if last_n >= 4 and not same_as_last:
+            return rows
         for i in range(col_count):
-            if not target[i] and ref[i]:
-                target[i] = ref[i]
-        rows[-1] = target
+            if not last[i] and ref[i]:
+                last[i] = ref[i]
+        rows[-1] = last
         return rows
 
     def _postprocess_rows(self, rows: List[List[str]]) -> List[List[str]]:
@@ -4025,9 +4738,9 @@ class TableImageExtractor:
             fixed: List[str] = []
             for val in row:
                 raw = str(val).strip() if val is not None else ""
-                # 仅整格横杠=无数据；-2.3 等负数保留
-                if raw.replace("−", "-").replace("–", "-").replace("—", "-") == "-":
-                    fixed.append("")
+                # 整格只有「-」或已标记无数据：保留标记，跳过后续单列重识
+                if raw == self.NODATA_MARK or self._is_lone_dash(raw):
+                    fixed.append(self.NODATA_MARK)
                     continue
                 v = self._fix_decimal_ocr(val) if val else ""
                 if v in ("D", "U", "U.", "O", "o"):
@@ -4048,13 +4761,10 @@ class TableImageExtractor:
                         v = self._fix_decimal_ocr(("-" if neg else "") + body)
                 fixed.append(v)
             result.append(fixed)
-        return [
-            self._apply_decimal_row_repairs(self._sanitize_data_row(r))
-            for r in result
-        ]
+        return [self._apply_decimal_row_repairs(r) for r in result]
 
     def _apply_decimal_row_repairs(self, row: List[str]) -> List[str]:
-        """行级小数点补救：先 5 位双候选选优，再 4 位电价 d.ddd。"""
+        """行级小数点补救：5 位、4 位都按同行锚点在两种插点里选优。"""
         if not self.fix_decimal_enabled:
             return row
         row = self._repair_five_digit_lost_dots(row)
@@ -4155,40 +4865,37 @@ class TableImageExtractor:
             best = min(best, abs(value - a) / denom)
         return best
 
-    def _pick_five_digit_fix(
+    def _pick_lost_dot_candidate(
         self,
-        digits: str,
+        candidates: Sequence[str],
         row: Sequence[str],
         col: int,
         sign: str = "",
+        fallback: Optional[str] = None,
     ) -> Optional[str]:
         """
-        5 位无点双候选选优：xx.xxx / xxx.xx。
+        无点双候选选优。
 
         得分 = 相对所有锚点的 min 相对误差（抗 15 分钟跳变）。
         最优 > ratio_k → 拒补；两候选接近 → 按小数位数众数破平，仍平则拒补。
-        无锚点：电价行默认 xx.xxx，否则拒补。
+        无锚点：仅当调用方给出 fallback 且本行像电价时用 fallback，否则拒补。
         """
-        if not re.fullmatch(r"\d{5}", digits):
-            return None
-        cand_xx = f"{digits[:2]}.{digits[2:]}"   # xx.xxx
-        cand_xxx = f"{digits[:3]}.{digits[3:]}"  # xxx.xx
         anchors = self._row_fix_decimal_anchors(row, col)
         k = self.fix_decimal_ratio_k
         tie_eps = self.fix_decimal_tie_eps
 
         if not anchors:
-            if self._row_looks_like_price(row):
-                return f"{sign}{cand_xx}"
+            if fallback and self._row_looks_like_price(row):
+                return f"{sign}{fallback}"
             return None
 
         scored: List[Tuple[float, str, int]] = []
-        for cand in (cand_xx, cand_xxx):
+        for cand in candidates:
             try:
                 fv = abs(float(cand))
             except ValueError:
                 continue
-            frac_n = len(cand.split(".", 1)[1])
+            frac_n = len(cand.split(".", 1)[1]) if "." in cand else 0
             scored.append((self._rel_err_to_anchors(fv, anchors), cand, frac_n))
         if not scored:
             return None
@@ -4203,6 +4910,38 @@ class TableImageExtractor:
                     return f"{sign}{cand}"
             return None
         return f"{sign}{best_c}"
+
+    def _pick_five_digit_fix(
+        self,
+        digits: str,
+        row: Sequence[str],
+        col: int,
+        sign: str = "",
+    ) -> Optional[str]:
+        """5 位无点双候选：xx.xxx / xxx.xx。无锚点时电价行默认 xx.xxx。"""
+        if not re.fullmatch(r"\d{5}", digits):
+            return None
+        cand_xx = f"{digits[:2]}.{digits[2:]}"   # xx.xxx
+        cand_xxx = f"{digits[:3]}.{digits[3:]}"  # xxx.xx
+        return self._pick_lost_dot_candidate(
+            (cand_xx, cand_xxx), row, col, sign=sign, fallback=cand_xx
+        )
+
+    def _pick_four_digit_fix(
+        self,
+        digits: str,
+        row: Sequence[str],
+        col: int,
+        sign: str = "",
+    ) -> Optional[str]:
+        """4 位无点双候选：xx.xx / x.xxx。无锚点时不猜，保留原文。"""
+        if not re.fullmatch(r"\d{4}", digits):
+            return None
+        cand_xx = f"{digits[:2]}.{digits[2:]}"  # xx.xx
+        cand_x = f"{digits[:1]}.{digits[1:]}"   # x.xxx
+        return self._pick_lost_dot_candidate(
+            (cand_xx, cand_x), row, col, sign=sign, fallback=None
+        )
 
     def _repair_five_digit_lost_dots(self, row: List[str]) -> List[str]:
         """
@@ -4236,63 +4975,31 @@ class TableImageExtractor:
 
     def _repair_price_row_lost_dots(self, row: List[str]) -> List[str]:
         """
-        电价行漏小数点补救。
+        4 位无点漏小数点补救：双候选 + 邻格/同行选优。
 
-        4 位无点整数 → d.ddd（3262→3.262、5308→5.308）。
-        量级校验优先用「小电价簇」(abs<80)，避免同行大电价把中位拉高导致小值补点失败。
+        1205 在同行像 15.x 时选 12.05，在同行像 3.x 时选 1.205。
+        两候选都不像则保留原文。锚点看原始行，避免同批多个 4 位格互相污染。
         """
-        if not self.fix_decimal_enabled:
+        if not self.fix_decimal_enabled or not row:
             return row
-        if not row or len(row) < 3:
-            return row
-        dotted_all: List[float] = []
-        dotted_small: List[float] = []
         digit4_idxs: List[int] = []
         for i, cell in enumerate(row):
             raw = str(cell or "").strip().replace("−", "-").replace("–", "-")
             if not raw or raw == "-":
                 continue
-            if re.fullmatch(r"-?\d{1,3}\.\d{2,3}", raw):
-                try:
-                    fv = abs(float(raw))
-                except ValueError:
-                    continue
-                dotted_all.append(fv)
-                if fv < 80.0:
-                    dotted_small.append(fv)
-            elif re.fullmatch(r"-?\d{4}", raw):
+            body = raw[1:] if raw.startswith("-") and len(raw) > 1 else raw
+            if re.fullmatch(r"\d{4}", body):
                 digit4_idxs.append(i)
         if not digit4_idxs:
             return row
-        # 小簇至少 1 个、或全体带点至少 2 个
-        if len(dotted_small) < 1 and len(dotted_all) < 2:
-            return row
         out = list(row)
         for i in digit4_idxs:
-            raw = str(out[i]).strip().replace("−", "-").replace("–", "-")
+            raw = str(row[i]).strip().replace("−", "-").replace("–", "-")
             sign = "-" if raw.startswith("-") else ""
             body = raw[1:] if sign else raw
-            fixed = f"{sign}{body[0]}.{body[1:]}"
-            try:
-                fv = abs(float(fixed))
-            except ValueError:
-                continue
-            ok = False
-            if dotted_small and fv < 80.0:
-                med = float(np.median(dotted_small))
-                if med > 0 and fv <= max(50.0, med * 10) and fv >= min(0.05, med / 10):
-                    ok = True
-            if not ok and len(dotted_all) >= 2:
-                med = float(np.median(dotted_all))
-                if med > 0 and not (fv > med * 8 or fv < med / 8):
-                    ok = True
-                elif 0.05 <= fv <= 50 and 0.05 <= med <= 50:
-                    ok = True
-            # 小电价行常见：有任一小簇锚点且补点结果本身像电价
-            if not ok and dotted_small and 0.05 <= fv <= 50:
-                ok = True
-            if ok:
-                out[i] = fixed
+            picked = self._pick_four_digit_fix(body, row, i, sign=sign)
+            if picked:
+                out[i] = picked
         return out
 
     def _price_row_small_stats(
@@ -4334,9 +5041,9 @@ class TableImageExtractor:
         if not raw or raw == "-":
             return False
         # 电价行无点整数：
-        # - 4 位：预览像电价则交给 d.ddd 补点，否则重识
+        # - 4 位：预览像电价则交给 xx.xx / x.xxx 选优，否则重识
         # - 5/6 位：交给行级补点（19396→19.396），禁止按 float 量级误判重识
-        # - 1~3 位：粘连残段（193），相对小电价簇过大才重识
+        # - 1 位：不重识；2～3 位离群，或电价行里的无点整数，走竖纹重识
         if "." not in raw:
             if not re.fullmatch(r"-?\d{1,6}", raw):
                 return False
@@ -4346,7 +5053,7 @@ class TableImageExtractor:
             if len(digits) >= 5:
                 return False
             if len(digits) == 4:
-                # 预览已像电价 → 行级 d.ddd 补点；勿重识失败再误清空
+                # 预览落在电价量级 → 交给行级 xx.xx / x.xxx 选优；勿重识失败再误清空
                 pv = self._preview_sticky_price(raw)
                 if pv is not None and 0.5 <= pv <= 200.0:
                     return False
@@ -4358,6 +5065,10 @@ class TableImageExtractor:
             if len(digits) >= 3 and small_med > 0 and fv > small_med * 3:
                 return True
             if med_int <= 2 and len(digits) >= 3 and fv >= 10:
+                return True
+            # 电价行里的 2～3 位无点整数：拍屏竖纹常把 62.4 读成 67、15.2 读成 152。
+            # 量级未必离群，交给竖纹抑制后的单格重识，对不上邻格就不改。
+            if len(digits) in (2, 3) and self._row_looks_like_price(row):
                 return True
             return False
         try:
@@ -4447,83 +5158,6 @@ class TableImageExtractor:
                     continue
                 n += 1
         return n
-
-    @staticmethod
-    def _integer_digits(v: float) -> int:
-        """绝对值的整数位数（0→1；0.x→1）。"""
-        x = abs(float(v))
-        if x < 1.0:
-            return 1
-        return int(math.floor(math.log10(x))) + 1
-
-    def _near_power10_boundary(self, v: float) -> bool:
-        """是否靠近 10^k（位数边界，如 99↔100），交给辅规则而非位数硬删。"""
-        x = abs(float(v))
-        if x <= 0:
-            return False
-        k = int(round(math.log10(x)))
-        boundary = 10.0 ** k
-        if boundary <= 0:
-            return False
-        return abs(x - boundary) / boundary <= self.sanitize_boundary_pct
-
-    def _sanitize_data_row(self, row: List[str]) -> List[str]:
-        """开启时对整数行为比值清洗；电价行跳过。异常格只置空，不猜修。"""
-        cleaned = [
-            ("" if (cell and self._is_monster_numeric_token(cell)) else cell)
-            for cell in row
-        ]
-        if not self.sanitize_enabled:
-            return cleaned
-        return self._sanitize_integer_peer_row(cleaned)
-
-    def _sanitize_integer_peer_row(self, row: List[str]) -> List[str]:
-        """
-        仅清洗「整数为主」的电力/计划行：相对同行中位数超出 ratio_k → 置空。
-
-        处置说明：
-        - 已去掉「位数众数」硬删：该规则假定同行同整数位数，电价尖峰
-          （3.x↔88.x）必然误杀，规则本身不合理。
-        - 电力行漏位/多位（28 / 2800）用比值即可覆盖，不必再按位数众数删。
-        - 小数为主的电价行跨数量级是业务正常，整行跳过清洗。
-        - OCR 明确负号不做量级置空。
-        """
-        parsed: List[Tuple[int, float, bool]] = []
-        dotted = 0
-        for i, cell in enumerate(row):
-            if not cell or not str(cell).strip():
-                continue
-            raw = str(cell).strip().replace("−", "-").replace("–", "-")
-            try:
-                keep_signed = raw.startswith("-") and len(raw) > 1
-                parsed.append((i, abs(float(raw)), keep_signed))
-                if "." in raw:
-                    dotted += 1
-            except ValueError:
-                continue
-        if len(parsed) < self.sanitize_min_samples:
-            return row
-        # 电价行：小数占比高 → 不清洗
-        if dotted / max(len(parsed), 1) >= 0.4:
-            return row
-
-        peers = [v for _, v, _ in parsed]
-        med = float(np.median(peers))
-        if med <= 0:
-            return row
-
-        k = self.sanitize_ratio_k
-        out = list(row)
-        for i, v, keep_signed in parsed:
-            if keep_signed:
-                continue
-            if v > med * k or v < med / k:
-                out[i] = ""
-        return out
-
-    # 兼容旧名
-    def _sanitize_digit_mode_row(self, row: List[str]) -> List[str]:
-        return self._sanitize_integer_peer_row(row)
 
     def _split_cell_values(self, text: str) -> List[str]:
         """
@@ -4834,7 +5468,7 @@ class TableImageExtractor:
         - 6 位 → xxx.xxx
         - 7 位 → 去首/尾后按 6 位试
         - 5 位不在此猜点（交给 _repair_five_digit_lost_dots 同行选优）
-        - 4 位及以下保持原文（电价 4 位由 _repair_price_row_lost_dots 处理）
+        - 4 位及以下保持原文（4 位由 _repair_price_row_lost_dots 在 xx.xx / x.xxx 间选优）
         fix_decimal.enabled=false 时只做符号规范化，不猜补点。
         """
         if not num:
@@ -4881,7 +5515,9 @@ class TableImageExtractor:
         """
         if not row:
             return True
-        zeros = sum(1 for v in row if v in ("", "0"))
+        zeros = sum(
+            1 for v in row if v in ("", "0", self.NODATA_MARK)
+        )
         return zeros >= len(row) * 0.85
 
     def _is_footer_text(self, text: str) -> bool:

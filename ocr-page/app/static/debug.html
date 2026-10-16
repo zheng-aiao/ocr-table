@@ -385,9 +385,8 @@
         <a href="/">履历首页</a>
       </p>
     </div>
-    <div class="mode-switch" role="group" aria-label="画面模式">
-      <button type="button" id="btnModeSingle" data-mode="single">单屏</button>
-      <button type="button" id="btnModeDual" data-mode="dual">双屏</button>
+    <div class="mode-switch" role="group" aria-label="联调模式">
+      <button type="button" id="btnModeImage" data-mode="image">单图</button>
       <button type="button" id="btnModeDouble" data-mode="double">双摄</button>
     </div>
   </header>
@@ -395,10 +394,11 @@
   <main>
     <section class="panel">
       <div class="step">
-        <div class="step-title">1. 抓图</div>
+        <div class="step-title" id="captureStepTitle">1. 抓图</div>
         <p class="hint" id="captureHint">从摄像机抓取最新画面并预览。</p>
         <div class="actions">
           <button id="btnCapture">抓图</button>
+          <button id="btnImagePick" style="display:none">选择图片并识别</button>
         </div>
         <div class="path" id="imagePathHint">当前图片：无</div>
         <div id="sourceRow" class="source-row">
@@ -520,7 +520,7 @@
             <button class="secondary" id="btnCurve">读曲线</button>
           </div>
         </div>
-        <p class="hint" id="curveHint">按 OCR 识别到的各行测点读 PI 曲线；双屏时左右分栏，各展示该机组全部指标。</p>
+        <p class="hint" id="curveHint">按 OCR 识别到的各行测点读 PI 曲线；双摄时左右分栏，各展示该侧全部指标。</p>
         <div id="curveMsg" class="msg"></div>
         <div id="curveSingle" style="display:block;">
           <div id="chart" class="chart tall"></div>
@@ -553,7 +553,7 @@
         <input id="tagInput" placeholder="例如 GX.DEMO.OCR" />
       </div>
       <div id="tagModalDual" style="display:none;">
-        <p class="hint">双屏左右机组前缀在 config.yaml 的 capture.dual.left/right.tag（此处只读）。</p>
+        <p class="hint">双摄左右前缀在 config.yaml 的 cameras.left.tag / cameras.right.tag（此处只读）。</p>
         <label>左机组前缀</label>
         <input id="tagInputL" readonly />
         <label style="margin-top:8px;">右机组前缀</label>
@@ -605,7 +605,7 @@
     };
     let ocrReady = false;
     let currentTag = "";
-    let viewMode = "single"; // single | dual | double
+    let viewMode = "double"; // image | double
     let screenTags = { left: "", right: "" };
     let screenTitles = { left: "左机组", right: "右机组" };
 
@@ -677,8 +677,8 @@
     });
 
     const BTN_IDS = [
-      "btnCapture", "btnOcr", "btnOcrPick", "btnOcrDetail", "btnOcrWrite", "btnPiWrite",
-      "btnCurve", "btnTagCfg", "btnTagSave", "btnModeSingle", "btnModeDual", "btnModeDouble",
+      "btnCapture", "btnImagePick", "btnOcr", "btnOcrPick", "btnOcrDetail", "btnOcrWrite", "btnPiWrite",
+      "btnCurve", "btnTagCfg", "btnTagSave", "btnModeImage", "btnModeDouble",
     ];
 
     function pad(n) { return String(n).padStart(2, "0"); }
@@ -1012,8 +1012,6 @@
     const CURVE_COLORS = ["#3d8bfd", "#3dd68c", "#e6c07b", "#c678dd", "#56b6c2", "#f07178"];
 
     function renderMultiCurve(chartInst, title, seriesList) {
-      const first = (seriesList[0] && seriesList[0].points) || [];
-      const xData = first.map((p) => p.t);
       chartInst.setOption({
         backgroundColor: "transparent",
         title: {
@@ -1030,12 +1028,11 @@
         },
         grid: { left: 48, right: 16, top: 56, bottom: 48 },
         xAxis: {
-          type: "category",
-          data: xData,
+          type: "time",
           axisLabel: {
             color: "#8b9bb4",
             rotate: 30,
-            interval: Math.max(1, Math.floor(xData.length / 12)),
+            hideOverlap: true,
           },
           axisLine: { lineStyle: { color: "#2a3548" } },
         },
@@ -1049,7 +1046,7 @@
           type: "line",
           smooth: true,
           showSymbol: (s.points || []).length < 48,
-          data: (s.points || []).map((p) => p.v),
+          data: (s.points || []).map((p) => [String(p.t || "").replace(" ", "T"), p.v]),
           lineStyle: { width: 2, color: CURVE_COLORS[i % CURVE_COLORS.length] },
         })),
       }, true);
@@ -1090,7 +1087,7 @@
     function syncCurveLayout() {
       const singleEl = document.getElementById("curveSingle");
       const dualEl = document.getElementById("curveDual");
-      if (viewMode === "dual" || viewMode === "double") {
+      if (viewMode === "double") {
         singleEl.style.display = "none";
         dualEl.style.display = "grid";
         document.getElementById("curveTitleL").textContent =
@@ -1098,12 +1095,12 @@
         document.getElementById("curveTitleR").textContent =
           `${screenTitles.right}（${screenTags.right || "R"}_*）`;
         document.getElementById("curveHint").textContent =
-          "双屏：左右各一图，每条曲线对应该机组 OCR 一行指标（测点 _1…_N）。";
+          "双摄：左右各一图，每条曲线对应该侧 OCR 一行指标（测点 _1…_N）。";
       } else {
         singleEl.style.display = "block";
         dualEl.style.display = "none";
         document.getElementById("curveHint").textContent =
-          "单屏：一张图展示各行测点曲线（OCR 得到几行就几条）。";
+          "单图：一张图展示各行测点曲线（OCR 得到几行就几条）。";
       }
       requestAnimationFrame(() => {
         Object.values(charts).forEach((c) => c && c.resize());
@@ -1133,7 +1130,7 @@
     }
 
     function refreshTagChip() {
-      if (viewMode === "dual" || viewMode === "double") {
+      if (viewMode === "double") {
         const L = screenTags.left || "L";
         const R = screenTags.right || "R";
         tagChip.textContent = `左 ${L}_* · 右 ${R}_*`;
@@ -1145,13 +1142,25 @@
       if (!tagChip.title) tagChip.title = prefix;
     }
 
+    function syncCaptureActions() {
+      const image = viewMode === "image";
+      const cap = document.getElementById("btnCapture");
+      const pick = document.getElementById("btnImagePick");
+      const ocrPick = document.getElementById("btnOcrPick");
+      const title = document.getElementById("captureStepTitle");
+      if (cap) cap.style.display = image ? "none" : "";
+      if (pick) pick.style.display = image ? "" : "none";
+      if (ocrPick) ocrPick.style.display = image ? "none" : "";
+      if (title) title.textContent = image ? "1. 上传图片" : "1. 抓图";
+    }
+
     function applyViewMode(mode, dual) {
-      const m = String(mode || "single").toLowerCase();
-      viewMode = (m === "dual" || m === "double" || m === "double_camera") ? (m === "dual" ? "dual" : "double") : "single";
+      const m = String(mode || "double").toLowerCase();
+      viewMode = (m === "image" || m === "single") ? "image" : "double";
       const badge = document.getElementById("modeBadge");
-      badge.textContent = viewMode === "double" ? "双摄·两相机" : (viewMode === "dual" ? "双屏·两机组" : "单屏");
-      document.getElementById("btnModeSingle").classList.toggle("active", viewMode === "single");
-      document.getElementById("btnModeDual").classList.toggle("active", viewMode === "dual");
+      badge.textContent = viewMode === "image" ? "单图" : "双摄·两相机";
+      const btnImg = document.getElementById("btnModeImage");
+      if (btnImg) btnImg.classList.toggle("active", viewMode === "image");
       const btnDbl = document.getElementById("btnModeDouble");
       if (btnDbl) btnDbl.classList.toggle("active", viewMode === "double");
       document.getElementById("ocrWrap").style.display = "none";
@@ -1198,9 +1207,10 @@
       } else {
         if (capGrid) capGrid.classList.remove("show");
         if (dualPrev) dualPrev.style.display = "none";
-        document.getElementById("captureHint").textContent = "从摄像机抓取最新画面并预览。";
+        document.getElementById("captureHint").textContent =
+          "手动上传一张本机图片，上传后直接进行 OCR 识别。";
         document.getElementById("ocrHint").innerHTML =
-          "对<strong>抓取图</strong>或<strong>本机任选图片</strong>：先 OCR 左上角日期筛选框，再识别表头时刻与数据行；日期失败则直接失败。";
+          "单图：选择一张图片后自动识别。先 OCR 左上角<strong>日期筛选框</strong>，再识别表头时刻与数据行；日期失败则直接失败。";
         document.getElementById("tagModalSingle").style.display = "block";
         document.getElementById("tagModalDual").style.display = "none";
         document.getElementById("btnTagSave").style.display = "";
@@ -1212,37 +1222,45 @@
       }
       refreshTagChip();
       syncCurveLayout();
+      syncCaptureActions();
     }
 
     let cachedDualCfg = null;
 
-    async function switchViewMode(mode) {
-      const raw = String(mode || "single").toLowerCase();
-      const next = raw === "dual" ? "dual" : (raw === "double" || raw === "double_camera" ? "double" : "single");
+    function switchViewMode(mode) {
+      const raw = String(mode || "double").toLowerCase();
+      const next = (raw === "image" || raw === "single") ? "image" : "double";
       if (next === viewMode) return;
-      setBusy(true);
-      try {
-        await call("/api/config/view/mode", {
-          method: "PUT",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ mode: next }),
-        });
-        const label = next === "double" ? "双摄" : (next === "dual" ? "双屏" : "单屏");
-        clearOcrResult(`已切换为${label}，请重新 OCR。`);
-        setMsg("ocrWriteMsg", "");
-        setMsg("curveMsg", "");
-        applyViewMode(next, cachedDualCfg);
-        toast("模式已切换", next === "double" ? "双摄·两相机" : (next === "dual" ? "双屏·两机组" : "单屏"), true);
-      } catch (e) {
-        toast("切换失败", e.message, false);
-      } finally {
-        setBusy(false);
+      const label = next === "image" ? "单图" : "双摄";
+      clearOcrResult(`已切换为${label}，请重新识别。`);
+      setMsg("ocrWriteMsg", "");
+      setMsg("curveMsg", "");
+      setMsg("captureMsg", "");
+      latestImagePath = "";
+      latestUploadName = "";
+      latestLeftPath = "";
+      latestRightPath = "";
+      revokePreviewObjectUrl();
+      const previewEl = document.getElementById("preview");
+      if (previewEl) {
+        previewEl.style.display = "none";
+        previewEl.removeAttribute("src");
       }
+      const row = document.getElementById("sourceRow");
+      if (row) row.classList.remove("show");
+      const pathHint = document.getElementById("imagePathHint");
+      if (pathHint) pathHint.textContent = "当前图片：无";
+      clearCaptureGrid();
+      clearMonitorPreview();
+      applyViewMode(next, cachedDualCfg);
+      toast("模式已切换", next === "image" ? "单图·手动上传" : "双摄·两相机", true);
     }
 
-    document.getElementById("btnModeSingle").onclick = () => switchViewMode("single");
-    document.getElementById("btnModeDual").onclick = () => switchViewMode("dual");
+    document.getElementById("btnModeImage").onclick = () => switchViewMode("image");
     document.getElementById("btnModeDouble").onclick = () => switchViewMode("double");
+    document.getElementById("btnImagePick").onclick = () => {
+      document.getElementById("ocrFile").click();
+    };
 
     async function loadPiConfig() {
       try {
@@ -1271,8 +1289,8 @@
         document.getElementById("tagInputL").value = screenTags.left || "";
         document.getElementById("tagInputR").value = screenTags.right || "";
       } catch (e) {
-        applyViewMode("single", null);
-        setMsg("captureMsg", "读取画面模式失败，按单屏：" + e.message, "warn");
+        applyViewMode("double", null);
+        setMsg("captureMsg", "读取画面模式失败，按双摄：" + e.message, "warn");
       }
     }
 
@@ -1358,8 +1376,8 @@
         ocrReady = false;
         btnOcrWrite.disabled = true;
         const tip = failParts.length
-          ? ("双屏日期 OCR 失败（已跳过表格）：" + failParts.join("；"))
-          : (data.message || "双屏识别完成，但左右均无有效点。");
+          ? ("双摄日期 OCR 失败（已跳过表格）：" + failParts.join("；"))
+          : (data.message || "双摄识别完成，但左右均无有效点。");
         setMsg("ocrMsg", tip, "err");
         toast("OCR 失败", tip, false);
         return false;
@@ -1367,15 +1385,15 @@
       ocrReady = true;
       btnOcrWrite.disabled = false;
       let tip =
-        `双屏 OCR：左 ${left.point_count || 0} 点（${left.base_date || "?"} · ${left.date_source || "ocr"} · ${left.tag || ""}）` +
+        `双摄 OCR：左 ${left.point_count || 0} 点（${left.base_date || "?"} · ${left.date_source || "ocr"} · ${left.tag || ""}）` +
         ` · 右 ${right.point_count || 0} 点（${right.base_date || "?"} · ${right.date_source || "ocr"} · ${right.tag || ""}）`;
       if (failParts.length) {
         tip += "；部分失败：" + failParts.join("；");
         setMsg("ocrMsg", tip, "warn");
-        toast("双屏部分成功", tip, true);
+        toast("双摄部分成功", tip, true);
       } else {
         setMsg("ocrMsg", tip, "ok");
-        toast("双屏 OCR 成功", tip, true);
+        toast("双摄 OCR 成功", tip, true);
       }
       return true;
     }
@@ -1504,11 +1522,14 @@
           return;
         }
       } else if (!latestImagePath) {
-        setMsg("ocrMsg", "请先抓图，或使用「选择本机图片 OCR」。", "warn");
+        const tip = viewMode === "image"
+          ? "请先选择一张本机图片。"
+          : "请先抓图，或使用「选择本机图片 OCR」。";
+        setMsg("ocrMsg", tip, "warn");
         toast("无法 OCR", "还没有当前图片", false);
         return;
       }
-      setMsg("ocrMsg", viewMode === "double" ? "双摄识别中…" : (viewMode === "dual" ? "双屏识别中…" : "识别中…"));
+      setMsg("ocrMsg", viewMode === "double" ? "双摄识别中…" : "识别中…");
       clearOcrResult();
       setMsg("ocrWriteMsg", "");
       try {
@@ -1571,12 +1592,12 @@
       const file = ev.target.files && ev.target.files[0];
       ev.target.value = "";
       if (!file) return;
-      setMsg("ocrMsg", viewMode === "double" ? "上传并双摄识别中…" : (viewMode === "dual" ? "上传并双屏识别中…" : "上传并识别中…"));
+      setMsg("ocrMsg", viewMode === "double" ? "上传并双摄识别中…" : "上传并识别中…");
       clearOcrResult();
       setMsg("ocrWriteMsg", "");
       setMsg("captureMsg", "");
       try {
-        if (viewMode === "dual" || viewMode === "double") {
+        if (viewMode === "double") {
           const fd = new FormData();
           fd.append("file", file, file.name);
           const data = await call("/api/ocr/dual/upload", { method: "POST", body: fd });
@@ -1585,7 +1606,7 @@
           const disk = data.source_copy || latestImagePath || "";
           setMsg(
             "captureMsg",
-            "已选用本机图片并落盘（双屏原图+左右裁剪）：" + shown
+            "已选用本机图片并落盘（左右原图）：" + shown
               + (disk ? "　·　落盘：" + disk : ""),
             "ok"
           );
@@ -1621,7 +1642,7 @@
       try {
         // 双屏：绝不传统一 tag，严格按点内 tag（左右前缀已写在点上）+ 各自 timestamp
         // 带上 OCR 落盘的 run_id，写成功后把执行履历从「待写PI」改为成功
-        const body = (viewMode === "dual" || viewMode === "double")
+        const body = (viewMode === "double")
           ? { points: lastOcrPoints }
           : { points: lastOcrPoints, tag: currentTag || null };
         if (lastRunId) body.run_id = lastRunId;
@@ -1634,8 +1655,8 @@
           ? ` · 履历 ${data.run.result_status}`
           : (lastRunId ? ` · 履历 ${lastRunId}` : "");
         if (data.ok) {
-          const tip = (viewMode === "dual" || viewMode === "double")
-            ? `双屏写入成功：${data.written}/${data.total}（按点内左右测点）${runTip}`
+          const tip = (viewMode === "double")
+            ? `双摄写入成功：${data.written}/${data.total}（按点内左右测点）${runTip}`
             : `写入成功：${data.written}/${data.total}（测点 ${data.tag || currentTag}）${runTip}`;
           setMsg("ocrWriteMsg", tip, "ok");
           toast("OCR→PI 成功", `${data.written}/${data.total} 点已写入`, true);
@@ -1699,7 +1720,7 @@
       setBusy(true);
       setMsg("curveMsg", "读取曲线中…");
       try {
-        if (viewMode === "dual") {
+        if (viewMode === "double") {
           syncCurveLayout();
           const leftTags = lastOcrSides.left.rowTags.length
             ? lastOcrSides.left.rowTags
@@ -1721,7 +1742,7 @@
           cR.resize();
           setMsg(
             "curveMsg",
-            `双屏曲线：左 ${leftSeries.length} 条 · 右 ${rightSeries.length} 条（按 OCR 业务日）`,
+            `双摄曲线：左 ${leftSeries.length} 条 · 右 ${rightSeries.length} 条（按 OCR 业务日）`,
             "ok"
           );
           toast("读曲线成功", `L${leftSeries.length} / R${rightSeries.length}`, true);
@@ -1733,7 +1754,7 @@
           const range = dayRangeFromBizDate(lastOcrSides.single.baseDate);
           const series = await fetchCurveSeries(tags, range.start, range.end);
           const c = ensureChart("S", "chart");
-          renderMultiCurve(c, `单屏 · ${range.day}`, series);
+          renderMultiCurve(c, `单图 · ${range.day}`, series);
           c.resize();
           setMsg("curveMsg", `已加载 ${series.length} 条测点曲线 · ${range.day}（按 OCR 业务日）`, "ok");
           toast("读曲线成功", `${series.length} 条`, true);

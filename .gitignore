@@ -6,3 +6,6 @@ python/
 __pycache__/
 *.pyc
 *.log
+
+# Runtime data (captures, OCR runs, logs, pid)
+ocr-page/data/

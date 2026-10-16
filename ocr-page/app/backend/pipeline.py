@@ -10,16 +10,13 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from .config import (
-    ROOT_DIR,
     get_capture_tag,
     get_config,
     get_ocr_date_cfg,
-    get_ocr_early_stop,
-    get_ocr_early_stop_min_density,
+    get_ocr_auto_enable,
     get_ocr_max_width,
     get_ocr_min_points,
     get_ocr_fix_decimal_cfg,
-    get_ocr_sanitize_cfg,
     get_ocr_scale,
     get_ocr_table_crop,
     get_ocr_onnx_threads,
@@ -66,6 +63,7 @@ def evaluate_ocr_point_count(
 
 def capture_only() -> Dict[str, Any]:
     """调试：并行抓两路摄像头，并预裁有效区域（auto_monitor）供联调预览。"""
+    from .camera_common import cam_log_prefix
     from .config import get_auto_monitor, resolve_project_path
     from .monitor_crop import prepare_monitor_work_image
     from .pipeline_dual import capture_dual_cameras, get_camera_defs
@@ -102,7 +100,10 @@ def capture_only() -> Dict[str, Any]:
             side_dir = preview_root / side
             side_dir.mkdir(parents=True, exist_ok=True)
             work_path, mon_meta, mon_str = prepare_monitor_work_image(
-                src, side_dir, enabled=bool(auto_monitor)
+                src,
+                side_dir,
+                enabled=bool(auto_monitor),
+                log_prefix=cam_log_prefix(side),
             )
             item["monitor_path"] = mon_str or str(work_path)
             item["monitor"] = mon_meta
@@ -180,12 +181,15 @@ def ocr_only(
     from .config import get_auto_monitor
 
     auto_monitor = get_auto_monitor(cfg)
+    from .camera_common import cam_log_prefix
+
     work_path, monitor_meta, monitor_path = prepare_monitor_work_image(
-        image_path, run_dir, enabled=bool(auto_monitor)
+        image_path,
+        run_dir,
+        enabled=bool(auto_monitor),
+        log_prefix=cam_log_prefix("single"),
     )
     work_image = str(work_path)
-
-    from .camera_common import cam_log_prefix
 
     t_ocr = time.perf_counter()
     result = extract_points_from_image(
@@ -197,16 +201,14 @@ def ocr_only(
         tag_prefix=_tag_prefix(cfg),
         base_date=base_date,
         debug_dir=run_dir,
-        layout="single",
-        sanitize=get_ocr_sanitize_cfg(cfg),
+        layout="double",
         fix_decimal=get_ocr_fix_decimal_cfg(cfg),
-        early_stop=get_ocr_early_stop(cfg),
-        early_stop_min_density=get_ocr_early_stop_min_density(cfg),
+        auto_enable=get_ocr_auto_enable(cfg),
         max_ocr_width=get_ocr_max_width(cfg),
-        date_cfg=get_ocr_date_cfg(cfg, layout="single"),
-        table_crop=get_ocr_table_crop(cfg, layout="single"),
+        date_cfg=get_ocr_date_cfg(cfg, layout="double"),
+        table_crop=get_ocr_table_crop(cfg, layout="double"),
         onnx_threads=get_ocr_onnx_threads(cfg),
-        log_prefix=cam_log_prefix("single"),
+        log_prefix=cam_log_prefix("left"),
     )
     ocr_ms = _elapsed_ms(t_ocr)
     payload = {**ocr_result_to_dict(result)}
@@ -374,166 +376,20 @@ def run_pipeline(
     *,
     trigger: str = "manual",
 ) -> Dict[str, Any]:
-    """按 capture.mode：double/dual → 双摄流水线；single → 单路（左相机）。"""
-    from .pipeline_dual import get_capture_mode, run_pipeline_dual
+    """本分支固定双摄流水线。"""
+    del base_date
+    from .pipeline_dual import run_pipeline_dual
 
-    mode = get_capture_mode()
-    if mode in ("double", "dual"):
-        return run_pipeline_dual(trigger=trigger)
-    return _run_pipeline_single_legacy(base_date=base_date, trigger=trigger)
-
-
-def _run_pipeline_single_legacy(
-    base_date: Optional[datetime] = None,
-    *,
-    trigger: str = "manual",
-) -> Dict[str, Any]:
-    """旧单摄流水线（保留代码，本分支默认不调用）。"""
-    from .hikvision import build_camera_client_for_side
-    from .pipeline_dual import get_camera_defs
-    from .run_store import persist_pipeline_result
-
-    t_all = time.perf_counter()
-    started_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    cfg = get_config()
-    cams = get_camera_defs(cfg)
-    cam = build_camera_client_for_side(cfg, ROOT_DIR, "left", cams["left"])
-    t_cap = time.perf_counter()
-    image_path = cam.capture()
-    capture_ms = _elapsed_ms(t_cap)
-
-    ocr_cfg = cfg.get("ocr", {})
-    run_dir = new_ocr_run_dir("single", cfg)
-    source_copy = _copy_source(str(image_path), run_dir)
-    from .config import get_auto_monitor
-
-    auto_monitor = get_auto_monitor(cfg)
-    work_path, monitor_meta, monitor_path = prepare_monitor_work_image(
-        image_path, run_dir, enabled=bool(auto_monitor)
-    )
-    from .camera_common import cam_log_prefix
-
-    t_ocr = time.perf_counter()
-    ocr = extract_points_from_image(
-        image_path=str(work_path),
-        workdir=resolve_ocr_workdir(cfg),
-        scale=get_ocr_scale(cfg),
-        min_confidence=float(ocr_cfg.get("min_confidence", 0.3)),
-        crop=None,
-        tag_prefix=_tag_prefix(cfg),
-        base_date=base_date,
-        debug_dir=run_dir,
-        layout="single",
-        sanitize=get_ocr_sanitize_cfg(cfg),
-        fix_decimal=get_ocr_fix_decimal_cfg(cfg),
-        early_stop=get_ocr_early_stop(cfg),
-        early_stop_min_density=get_ocr_early_stop_min_density(cfg),
-        max_ocr_width=get_ocr_max_width(cfg),
-        date_cfg=get_ocr_date_cfg(cfg, layout="single"),
-        table_crop=get_ocr_table_crop(cfg, layout="single"),
-        onnx_threads=get_ocr_onnx_threads(cfg),
-        log_prefix=cam_log_prefix("single"),
-    )
-    ocr_ms = _elapsed_ms(t_ocr)
-    ocr_dict = ocr_result_to_dict(ocr)
-    ocr_dict["monitor"] = monitor_meta
-    if monitor_path:
-        ocr_dict["monitor_image"] = monitor_path
-    if source_copy:
-        ocr_dict["source_copy"] = source_copy
-    ocr_dict["artifacts_dir"] = str(run_dir)
-
-    points_payload = [
-        {
-            "time_label": p.time_label,
-            "value": p.value,
-            "timestamp": p.timestamp.strftime("%Y-%m-%d %H:%M:%S"),
-            "tag": p.tag,
-            "row_index": p.row_index,
-        }
-        for p in ocr.points
-    ]
-    if ocr.ok is False and (ocr.reason or "").startswith("date"):
-        quality = {
-            "ok": False,
-            "point_count": 0,
-            "min_points": get_ocr_min_points(cfg),
-            "reason": ocr.reason or "date_ocr_failed",
-            "message": ocr.message
-            or "未识别到左上角日期筛选框，已跳过表格 OCR",
-        }
-        excel_path = None
-    else:
-        quality = evaluate_ocr_point_count(len(points_payload))
-        excel_path = _maybe_export_excel(ocr_dict, str(image_path), ocr.row_tags)
-    ocr_dict["quality"] = quality
-
-    pi_ms = 0
-    if not quality.get("ok"):
-        write = {
-            "ok": False,
-            "written": 0,
-            "total": 0,
-            "items": [],
-            "skipped": True,
-            "reason": quality.get("reason"),
-            "message": quality.get("message"),
-            "point_count": quality.get("point_count"),
-            "min_points": quality.get("min_points"),
-        }
-        out_ok = False
-    else:
-        t_pi = time.perf_counter()
-        write = write_points_to_pi(points_payload)
-        pi_ms = _elapsed_ms(t_pi)
-        out_ok = bool(write.get("ok"))
-
-    out: Dict[str, Any] = {
-        "ok": out_ok,
-        "capture": {"image_path": str(image_path), "size": Path(image_path).stat().st_size},
-        "ocr": ocr_dict,
-        "pi": write,
-        "quality": quality,
-        "point_count": quality.get("point_count"),
-        "min_points": quality.get("min_points"),
-        "artifacts_dir": str(run_dir),
-        "monitor": monitor_meta,
-        "timing": {
-            "capture_ms": capture_ms,
-            "ocr_ms": ocr_ms,
-            "monitor_ms": int(monitor_meta.get("ms") or 0),
-            "date_ms": int((ocr_dict.get("timing") or {}).get("date_ms") or 0),
-            "table_ms": int((ocr_dict.get("timing") or {}).get("table_ms") or 0),
-            "pi_ms": pi_ms,
-            "total_ms": _elapsed_ms(t_all),
-        },
-    }
-    if monitor_path:
-        out["monitor_image"] = monitor_path
-        out["work_image_path"] = str(work_path)
-    if not quality.get("ok"):
-        out["reason"] = quality.get("reason")
-        out["message"] = quality.get("message")
-    elif not out_ok:
-        out["reason"] = "pi_write_failed"
-        out["message"] = "写 PI 失败"
-    if source_copy:
-        out["source_copy"] = source_copy
-    if excel_path:
-        out["excel_path"] = excel_path
-    return persist_pipeline_result(
-        out, mode="single", trigger=trigger, started_at=started_at
-    )
+    return run_pipeline_dual(trigger=trigger)
 
 
 def curve(
     start: str,
     end: str,
     tag: Optional[str] = None,
-    count: Optional[int] = None,
 ) -> Dict[str, Any]:
+    """按测点读取 PI 档案中的时间与值，有多少返回多少。"""
     cfg = get_config()
-    pi_cfg = cfg.get("pi", {})
     client = get_pi_client(cfg)
     client.connect()
     prefix = get_capture_tag(cfg)
@@ -545,10 +401,9 @@ def curve(
         point = raw
     else:
         point = row_tag_name(raw, 0)
-    n = int(count or pi_cfg.get("curve_count", 96))
     start_dt = datetime.strptime(start, "%Y-%m-%d %H:%M:%S")
     end_dt = datetime.strptime(end, "%Y-%m-%d %H:%M:%S")
-    series = client.interp_values(point, start_dt, end_dt, n)
+    series = client.archive_values(point, start_dt, end_dt)
     return {
         "ok": True,
         "tag": point,

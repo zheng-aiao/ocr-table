@@ -14,6 +14,7 @@ import logging
 import os
 import sys
 import threading
+import time
 from ctypes import byref, cast, memset, sizeof, POINTER
 from datetime import datetime
 from pathlib import Path
@@ -323,6 +324,7 @@ class HikrobotMvsClient:
         frame = C["MV_FRAME_OUT"]()
         memset(byref(frame), 0, sizeof(frame))
         got_frame = False
+        t0 = time.perf_counter()
 
         try:
             st_dev = self._create_handle(cam)
@@ -374,12 +376,14 @@ class HikrobotMvsClient:
             size = out_path.stat().st_size if out_path.is_file() else 0
             from .camera_common import cam_log_prefix
 
+            ms = max(0, int(round((time.perf_counter() - t0) * 1000)))
             logger.info(
-                "%s抓图完成 path=%s bytes=%d type=mvs host=%s",
+                "%s抓图完成 ms=%s type=mvs host=%s bytes=%d path=%s",
                 cam_log_prefix(self.side or self.name_label),
-                out_path,
-                size,
+                ms,
                 self.host,
+                size,
+                out_path,
             )
             return out_path
         finally:

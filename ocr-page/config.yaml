@@ -6,42 +6,42 @@
 # tag: 该路抓拍识别结果写 PI 时的测点前缀 → 前缀_1…_N
 cameras:
   left:
-    type: mvs
-    host: "192.168.16.6"
-    tag: "GX.DEMO.OCR.L"
-    timeout_sec: 15
-    # MVS：本机连接相机的网卡 IP（枚举匹配失败时按 IP 直连用）
-    net_export: ""
-    jpeg_quality: 80
-  right:
     type: isapi
     host: "192.168.16.64"
-    tag: "GX.DEMO.OCR.R"
+    tag: "GX.DEMO.OCR.L"
     port: 80
     user: "admin"
     password: "Sdyw@192"
     channel: "101"
     timeout_sec: 15
+  right:
+    type: mvs
+    host: "192.168.16.6"
+    tag: "GX.DEMO.OCR.R"
+    timeout_sec: 15
+    # MVS：本机连接相机的网卡 IP（枚举匹配失败时按 IP 直连用）
+    net_export: ""
+    jpeg_quality: 80
 
 capture:
+  mode: single
   dir: "data/captures"
-  # 联调页 Tab：single | dual | double（双摄两相机）
-  mode: double
-  # 定时：开启后立刻跑一轮，之后每隔 interval_minutes 再跑；上一轮未完则跳过
+  # 本分支固定双摄；mode 字段忽略
+  # 定时：开启后立刻跑一轮；本轮结束后再等 interval_sec 秒开始下一周期
   # 落盘：data/captures/YYYYMMDD/H-MM_<left|right>.jpg
   schedule:
     enabled: false
-    interval_minutes: 15
+    interval_sec: 10
   # 各侧整图可先裁显示器有效区域再 OCR（四周有环境时建议开）
   auto_monitor: true
-  # 仅 OCR 回退框（相对各摄像头整屏图）；日期优先自动定位「日期」标签
-  dual:
+  # 双摄：table_crop=表格固定裁剪；date_crop=日期搜索带（相对有效区域图）
+  double:
     left:
-      table_crop: "0.02,0.52,0.97,0.90"
-      date_crop: "0.0,0.16,0.48,0.26"
+      table_crop: "0.02,0.52,1.0,0.90"
+      date_crop: "0.02,0.02,0.55,0.34"
     right:
       table_crop: "0.03,0.52,1.0,0.90"
-      date_crop: "0.0,0.16,0.48,0.26"
+      date_crop: "0.02,0.02,0.55,0.34"
 
 ocr:
   workdir: "app/ocr_engine"
@@ -49,21 +49,14 @@ ocr:
   max_ocr_width: 4800
   min_confidence: 0.3
   min_points: 8
-  # early_stop：表头可用且列≥4 即跳过后续；min_density 保留兼容（当前不参与判定）
-  early_stop: true
-  early_stop_min_density: 100
-  parallel_sides: false
+  # auto_enable：先跑 fixed；开启且 fixed 不够好（表头不可用或列<4）时再跑 auto
+  auto_enable: true
+  parallel_sides: true
   onnx_threads: 2
-  pi_date_back_days: 1
-  date_auto_locate: true
-  # 中间产物：single|dual|double / YYYYMMDD_HHMMSS_mmm/（双摄再下 left|right）
+  # 中间产物：double / YYYYMMDD_HHMMSS_mmm/{left|right}/
   artifacts_dir: "data/ocr_runs"
   fix_decimal:
     enabled: true
-    ratio_k: 3.0
-  sanitize:
-    enabled: true
-    min_samples: 4
     ratio_k: 3.0
 
 excel:
@@ -78,9 +71,10 @@ pi:
   server: "192.168.2.230"
   user: "piadmin"
   password: "Hdpi-6018"
-  curve_count: 96
   verify_write: true
   value_max: 1000
+  # 写 PI 业务日 = OCR 识别日向前退几天；1=提前一天，0=当天
+  pi_date_back_days: 1
 
 server:
   host: "127.0.0.1"

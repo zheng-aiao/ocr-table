@@ -591,18 +591,14 @@ class DualRunRequest(BaseModel):
 
 @app.get("/api/config/view")
 def api_get_view_config():
-    """画面模式 single|dual|double + cameras + capture.dual 裁剪。"""
-    from .config import get_single_cfg
-
+    """双摄配置：cameras + capture.double 裁剪（date_crop=搜索带）。"""
     cfg = get_config()
-    mode = get_capture_mode(cfg)
-    dual = get_dual_defs(cfg)
+    double = get_dual_defs(cfg)
     cams = get_camera_defs(cfg)
-    single = get_single_cfg(cfg)
     return {
         "ok": True,
-        "mode": mode,
-        "capture_mode": "double_camera" if mode == "double" else mode,
+        "mode": "double",
+        "capture_mode": "double_camera",
         "cameras": {
             side: {
                 "type": sc.get("type"),
@@ -611,11 +607,19 @@ def api_get_view_config():
             }
             for side, sc in cams.items()
         },
-        "single": {
-            "tag": single.get("tag") or "",
-            "crop": single.get("crop") or "",
-            "table_crop": single.get("table_crop") or "",
+        "double": {
+            side: {
+                "id": sc.get("id"),
+                "title": sc.get("title"),
+                "table_crop": sc.get("table_crop"),
+                "date_crop": sc.get("date_crop"),
+                "tag": sc.get("tag"),
+                "host": sc.get("host"),
+                "type": sc.get("type"),
+            }
+            for side, sc in double.items()
         },
+        # 兼容旧前端字段名
         "dual": {
             side: {
                 "id": sc.get("id"),
@@ -626,7 +630,7 @@ def api_get_view_config():
                 "host": sc.get("host"),
                 "type": sc.get("type"),
             }
-            for side, sc in dual.items()
+            for side, sc in double.items()
         },
     }
 
@@ -674,10 +678,10 @@ def api_curve(
     start: str = Query(..., description="yyyy-MM-dd HH:mm:ss"),
     end: str = Query(..., description="yyyy-MM-dd HH:mm:ss"),
     tag: Optional[str] = None,
-    count: Optional[int] = None,
 ):
+    """读取测点在时间范围内的 PI 档案值，有多少返回多少。"""
     try:
-        return curve(start=start, end=end, tag=tag, count=count)
+        return curve(start=start, end=end, tag=tag)
     except Exception as e:
         logger.exception("curve failed")
         raise HTTPException(500, str(e)) from e
@@ -691,14 +695,14 @@ def api_schedule_status():
     cfg = get_config()
     sch = (cfg.get("capture") or {}).get("schedule") or {}
     try:
-        interval = int(sch.get("interval_minutes", 15) or 15)
+        interval = int(sch.get("interval_sec", 10) or 0)
     except (TypeError, ValueError):
-        interval = 15
+        interval = 10
     return {
         "ok": True,
         "config": {
             "enabled": bool(sch.get("enabled", False)),
-            "interval_minutes": max(1, interval),
+            "interval_sec": max(0, interval),
         },
         "state": get_schedule_state(),
         "mode": get_capture_mode(cfg),

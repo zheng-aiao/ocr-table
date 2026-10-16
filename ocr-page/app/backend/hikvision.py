@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 import logging
+import time
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -102,6 +103,7 @@ class HikvisionIsapiClient:
     def capture(self) -> Path:
         """抓拍 JPEG 并落盘，返回文件路径。"""
         last_err: Optional[str] = None
+        t0 = time.perf_counter()
         for url in self._urls():
             for auth_name, auth in self._auths():
                 try:
@@ -150,12 +152,14 @@ class HikvisionIsapiClient:
                 path.write_bytes(resp.content)
                 from .camera_common import cam_log_prefix
 
+                ms = max(0, int(round((time.perf_counter() - t0) * 1000)))
                 logger.info(
-                    "%s抓图完成 path=%s bytes=%d type=isapi host=%s",
+                    "%s抓图完成 ms=%s type=isapi host=%s bytes=%d path=%s",
                     cam_log_prefix(self.side or self.name_label),
-                    path,
-                    len(resp.content),
+                    ms,
                     self.host,
+                    len(resp.content),
+                    path,
                 )
                 return path
 

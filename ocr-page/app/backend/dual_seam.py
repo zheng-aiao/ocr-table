@@ -134,11 +134,11 @@ def detect_dual_seam(
 
     out["ms"] = int((time.perf_counter() - t0) * 1000)
     logger.info(
-        "双屏缝定位 ok=%s seam=%.4f mode=%s ms=%s",
+        "双屏缝定位 ms=%s ok=%s seam=%.4f mode=%s",
+        out["ms"],
         out["ok"],
         out["seam"],
         out["mode"],
-        out["ms"],
     )
     return out
 

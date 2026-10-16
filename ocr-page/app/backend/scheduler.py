@@ -2,9 +2,9 @@
 """定时处置：按顶层 schedule 周期执行 抓图 → OCR → 入 PI。
 
 规则：
-- 认 enabled / interval_minutes / capture / ocr / pi
-- 开启后立刻跑第一轮；之后每隔 interval_minutes 尝试下一轮
-- 到点时若上一轮仍在执行则跳过，再等下一个间隔
+- 认 enabled / interval_sec / capture / ocr / pi
+- 开启后立刻跑第一轮；本轮结束后再等 interval_sec 秒开始下一周期
+- 周期串行：上一轮未结束不会开下一轮
 - 阶段开关按序截断：任一为 false 则该阶段及之后不执行
 """
 
@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import logging
 import threading
+import time
 from datetime import datetime, timedelta
 from typing import Any, Dict, Optional
 
@@ -26,7 +27,7 @@ _thread: Optional[threading.Thread] = None
 _state: Dict[str, Any] = {
     "running": False,
     "enabled": False,
-    "interval_minutes": 15,
+    "interval_sec": 10,
     "capture": True,
     "ocr": True,
     "pi": True,
@@ -51,7 +52,7 @@ def _schedule_cfg(cfg: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
 
 def _sync_state_from_cfg(sch: Dict[str, Any]) -> None:
     _state["enabled"] = sch["enabled"]
-    _state["interval_minutes"] = sch["interval_minutes"]
+    _state["interval_sec"] = sch["interval_sec"]
     _state["capture"] = sch["capture"]
     _state["ocr"] = sch["ocr"]
     _state["pi"] = sch["pi"]
@@ -85,6 +86,7 @@ def _execute_pipeline() -> Dict[str, Any]:
         do_ocr,
         do_pi,
     )
+    t0 = time.perf_counter()
     try:
         if not do_capture:
             reason = "schedule.capture=false，本轮跳过抓拍/OCR/写PI"
@@ -100,15 +102,10 @@ def _execute_pipeline() -> Dict[str, Any]:
                 "stages": stages,
             }
 
-        # 定时：按 capture.mode；double/dual 走双摄/双屏流水线，single 走单屏
-        if mode in ("double", "dual"):
-            result = run_pipeline_dual(
-                trigger="schedule", do_ocr=do_ocr, do_pi=do_pi
-            )
-        else:
-            from .pipeline import run_pipeline
-
-            result = run_pipeline(trigger="schedule")
+        # 本分支固定双摄流水线
+        result = run_pipeline_dual(
+            trigger="schedule", do_ocr=do_ocr, do_pi=do_pi
+        )
         result = dict(result)
         result.setdefault("stages", stages)
         ok = bool(result.get("ok"))
@@ -121,8 +118,12 @@ def _execute_pipeline() -> Dict[str, Any]:
                 or result.get("reason")
                 or "本轮识别未通过 min_points 或写 PI 失败"
             )
+        total_ms = int((result.get("timing") or {}).get("total_ms") or 0)
+        if total_ms <= 0:
+            total_ms = max(0, int(round((time.perf_counter() - t0) * 1000)))
         logger.info(
-            "定时处置结束 ok=%s mode=%s stages=%s left_ok=%s right_ok=%s reason=%s",
+            "定时处置结束 ms=%s ok=%s mode=%s stages=%s left_ok=%s right_ok=%s reason=%s",
+            total_ms,
             ok,
             mode,
             stages,
@@ -158,25 +159,8 @@ def run_scheduled_once(*, wait_if_busy: bool = False) -> Dict[str, Any]:
         _busy.release()
 
 
-def _spawn_tick() -> None:
-    """到点触发：上一轮未完则跳过；否则后台开跑，不阻塞间隔计时。"""
-    if not _busy.acquire(blocking=False):
-        reason = "上一次定时任务仍在执行，本次跳过"
-        _state["last_skipped"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        logger.warning(reason)
-        return
-
-    def _job() -> None:
-        try:
-            _execute_pipeline()
-        finally:
-            _busy.release()
-
-    threading.Thread(target=_job, name="capture-schedule-job", daemon=True).start()
-
-
 def _loop() -> None:
-    need_immediate = True
+    """串行周期：跑完一轮，再等待 interval_sec，然后开始下一轮。"""
     while not _stop.is_set():
         try:
             try:
@@ -188,26 +172,34 @@ def _loop() -> None:
 
             if not sch["enabled"]:
                 _state["next_run_at"] = None
-                need_immediate = True
                 _stop.wait(5.0)
                 continue
 
-            if need_immediate:
-                logger.info(
-                    "定时已开启，立刻执行第一轮（之后每 %d 分钟尝试一次）",
-                    sch["interval_minutes"],
-                )
-                _spawn_tick()
-                need_immediate = False
-            else:
-                _spawn_tick()
+            logger.info(
+                "定时周期开始（本轮结束后等待 %d 秒再开下一轮）",
+                sch["interval_sec"],
+            )
+            _state["next_run_at"] = None
+            run_scheduled_once(wait_if_busy=True)
+            if _stop.is_set():
+                break
 
-            wait_sec = float(sch["interval_minutes"] * 60)
+            try:
+                load_config()
+            except Exception:
+                logger.exception("定时调度热加载配置失败")
+            sch = _schedule_cfg()
+            _sync_state_from_cfg(sch)
+            if not sch["enabled"]:
+                _state["next_run_at"] = None
+                continue
+
+            wait_sec = float(sch["interval_sec"])
             next_at = datetime.now() + timedelta(seconds=wait_sec)
             _state["next_run_at"] = next_at.strftime("%Y-%m-%d %H:%M:%S")
             logger.info(
-                "定时调度等待 %d 分钟后下一轮 next=%s",
-                sch["interval_minutes"],
+                "本轮已结束，%s 秒后开始下一周期 next=%s",
+                sch["interval_sec"],
                 _state["next_run_at"],
             )
             if _stop.wait(wait_sec):
@@ -229,9 +221,9 @@ def start_scheduler() -> None:
     _thread = threading.Thread(target=_loop, name="capture-scheduler", daemon=True)
     _thread.start()
     logger.info(
-        "定时调度已启动 enabled=%s interval_minutes=%s capture=%s ocr=%s pi=%s",
+        "定时调度已启动 enabled=%s interval_sec=%s capture=%s ocr=%s pi=%s",
         sch["enabled"],
-        sch["interval_minutes"],
+        sch["interval_sec"],
         sch["capture"],
         sch["ocr"],
         sch["pi"],

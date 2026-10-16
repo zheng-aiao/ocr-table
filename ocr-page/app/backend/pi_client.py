@@ -91,11 +91,21 @@ class PiClient:
             c_int, POINTER(c_float), POINTER(c_int), POINTER(c_int)
         ]
         dll.pisn_getsnapshot.restype = c_int
-        # 插值曲线
+        # 插值（仅写后短窗回读）
         dll.piar_interpvalues.argtypes = [
             c_int, POINTER(c_int), POINTER(c_int), POINTER(c_float), POINTER(c_int)
         ]
         dll.piar_interpvalues.restype = c_int
+        # 档案压缩值：按库存时间与值原样返回
+        dll.piar_compvalues.argtypes = [
+            c_int,
+            POINTER(c_int),
+            POINTER(c_int),
+            POINTER(c_float),
+            POINTER(c_int),
+            c_int,
+        ]
+        dll.piar_compvalues.restype = c_int
         self._dll = dll
         return dll
 
@@ -287,6 +297,58 @@ class PiClient:
                     }
                 )
             return out
+
+    def archive_values(
+        self,
+        tag: str,
+        start: datetime,
+        end: datetime,
+    ) -> List[Dict[str, object]]:
+        """读取测点在 [start, end] 内的档案值，有多少返回多少。"""
+        if end < start:
+            start, end = end, start
+        start_ts = self.pi_timestamp(start)
+        end_ts = self.pi_timestamp(end)
+        chunk = 2000
+        out: List[Dict[str, object]] = []
+        cursor = start_ts
+        skip_ts: Optional[int] = None
+        with self._lock:
+            self.ensure_connected()
+            pt = self.find_point(tag)
+            dll = self._load()
+            for _ in range(500):
+                r_count = c_int(chunk)
+                times = (c_int * chunk)()
+                rvals = (c_float * chunk)()
+                istats = (c_int * chunk)()
+                times[0] = cursor
+                times[chunk - 1] = end_ts
+                rc = dll.piar_compvalues(pt, byref(r_count), times, rvals, istats, 0)
+                if rc != 0:
+                    raise PiClientError(f"piar_compvalues 失败: {tag}, code={rc}")
+                n = int(r_count.value)
+                if n <= 0:
+                    break
+                last_ts = int(times[n - 1])
+                for i in range(n):
+                    ts = int(times[i])
+                    if skip_ts is not None and ts == skip_ts:
+                        continue
+                    if ts < start_ts or ts > end_ts:
+                        continue
+                    out.append(
+                        {
+                            "t": self.from_pi_timestamp(ts).strftime("%Y-%m-%d %H:%M:%S"),
+                            "v": float(rvals[i]),
+                            "s": int(istats[i]),
+                        }
+                    )
+                if n < chunk or last_ts >= end_ts or last_ts <= cursor:
+                    break
+                skip_ts = last_ts
+                cursor = last_ts
+        return out
 
 
 _client: Optional[PiClient] = None

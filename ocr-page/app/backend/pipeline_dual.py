@@ -1,9 +1,10 @@
 # -*- coding: utf-8 -*-
 """双摄像头流水线（double-camera）：两路并行抓拍 → 处理 → 写 PI。
 
+本分支只服务双摄：
 - cameras.left / cameras.right：各自 type（mvs|isapi）、连接参数、写 PI 的 tag 前缀
-- capture.dual.left / right：仅 table_crop / date_crop（OCR 回退框）
-- 无 capture.mode；抓拍后统一：有效区域 → 纠偏 → 日期 → 表格识别
+- capture.double.left / right：table_crop（表格固定框）、date_crop（日期搜索带）
+- 流程：有效区域 → 纠偏 → 日期 → 表格识别
 """
 
 from __future__ import annotations
@@ -23,13 +24,11 @@ from .config import (
     get_config,
     get_auto_monitor,
     get_ocr_date_cfg,
-    get_ocr_early_stop,
-    get_ocr_early_stop_min_density,
+    get_ocr_auto_enable,
     get_ocr_max_width,
     get_ocr_min_points,
     get_ocr_parallel_sides,
     get_ocr_fix_decimal_cfg,
-    get_ocr_sanitize_cfg,
     get_ocr_scale,
     get_ocr_table_crop,
     get_ocr_onnx_threads,
@@ -48,75 +47,49 @@ from .pipeline import _elapsed_ms, evaluate_ocr_point_count, write_points_to_pi
 logger = logging.getLogger(__name__)
 
 DEFAULT_CAMERA: Dict[str, Dict[str, Any]] = {
-    "left": {"type": "mvs", "host": "", "tag": "GX.DEMO.OCR.L"},
-    "right": {"type": "isapi", "host": "", "tag": "GX.DEMO.OCR.R"},
+    "left": {"type": "isapi", "host": "", "tag": "GX.DEMO.OCR.L"},
+    "right": {"type": "mvs", "host": "", "tag": "GX.DEMO.OCR.R"},
 }
 
-DEFAULT_DUAL_CROP: Dict[str, Dict[str, Any]] = {
+DEFAULT_DOUBLE_CROP: Dict[str, Dict[str, Any]] = {
     "left": {
         "table_crop": "0.02,0.52,0.97,0.90",
-        "date_crop": "0.0,0.16,0.48,0.26",
+        "date_crop": "0.02,0.02,0.55,0.34",
     },
     "right": {
         "table_crop": "0.03,0.52,1.0,0.90",
-        "date_crop": "0.0,0.16,0.48,0.26",
+        "date_crop": "0.02,0.02,0.55,0.34",
     },
 }
 
 
 def get_capture_mode(cfg: Optional[Dict[str, Any]] = None) -> str:
-    """画面模式：single | dual | double（双摄）。"""
-    cfg = cfg or get_config()
-    mode = str((cfg.get("capture") or {}).get("mode") or "double").strip().lower()
-    if mode in ("double", "double_camera", "cameras"):
-        return "double"
-    if mode == "dual":
-        return "dual"
-    return "single"
+    """本分支固定双摄。"""
+    del cfg
+    return "double"
 
 
 def get_camera_defs(cfg: Optional[Dict[str, Any]] = None) -> Dict[str, Dict[str, Any]]:
     """cameras.left / cameras.right（type、连接、tag）。"""
     cfg = cfg or get_config()
     raw = cfg.get("cameras") or {}
-    # 兼容旧顶层 camera + capture.dual.*.host/tag
-    legacy_cam = cfg.get("camera") or {}
-    legacy_dual = ((cfg.get("capture") or {}).get("dual") or {})
     out: Dict[str, Dict[str, Any]] = {}
     for side in ("left", "right"):
         base = dict(DEFAULT_CAMERA[side])
-        if legacy_cam:
-            for k in (
-                "type",
-                "host",
-                "port",
-                "user",
-                "password",
-                "channel",
-                "timeout_sec",
-                "net_export",
-                "jpeg_quality",
-            ):
-                if legacy_cam.get(k) not in (None, ""):
-                    base[k] = legacy_cam[k]
-        side_legacy = legacy_dual.get(side) or {}
-        for k in ("host", "tag", "type", "port", "user", "password", "channel"):
-            if side_legacy.get(k) not in (None, ""):
-                base[k] = side_legacy[k]
         base.update(raw.get(side) or {})
         out[side] = base
     return out
 
 
-def get_dual_defs(cfg: Optional[Dict[str, Any]] = None) -> Dict[str, Dict[str, Any]]:
-    """capture.dual：仅 table_crop / date_crop；并附带 cameras 的 tag/host 供展示。"""
+def get_double_defs(cfg: Optional[Dict[str, Any]] = None) -> Dict[str, Dict[str, Any]]:
+    """capture.double：table_crop / date_crop（搜索带）；附带 cameras 的 tag/host。"""
     cfg = cfg or get_config()
     cap = cfg.get("capture") or {}
-    raw = cap.get("dual") or {}
+    raw = cap.get("double") or cap.get("dual") or {}
     cams = get_camera_defs(cfg)
     out: Dict[str, Dict[str, Any]] = {}
     for side in ("left", "right"):
-        crop = dict(DEFAULT_DUAL_CROP[side])
+        crop = dict(DEFAULT_DOUBLE_CROP[side])
         side_raw = raw.get(side) or {}
         if side_raw.get("table_crop") not in (None, ""):
             crop["table_crop"] = side_raw["table_crop"]
@@ -134,8 +107,13 @@ def get_dual_defs(cfg: Optional[Dict[str, Any]] = None) -> Dict[str, Dict[str, A
     return out
 
 
+def get_dual_defs(cfg: Optional[Dict[str, Any]] = None) -> Dict[str, Dict[str, Any]]:
+    """兼容旧名，等同 get_double_defs。"""
+    return get_double_defs(cfg)
+
+
 def get_screen_defs(cfg: Optional[Dict[str, Any]] = None) -> Dict[str, Dict[str, Any]]:
-    return get_dual_defs(cfg)
+    return get_double_defs(cfg)
 
 
 def capture_dual_cameras(cfg: Optional[Dict[str, Any]] = None) -> Dict[str, Path]:
@@ -186,13 +164,12 @@ def _ocr_one_side(
     base_date: Optional[datetime],
     export_excel: bool = True,
     debug_dir: Optional[Path] = None,
-    sanitize: Optional[Dict[str, Any]] = None,
     fix_decimal: Optional[Dict[str, Any]] = None,
     date_cfg: Optional[Dict[str, Any]] = None,
     table_crop: Optional[Tuple[float, float, float, float]] = None,
     side: str = "",
 ) -> Dict[str, Any]:
-    """对一侧整屏图做 OCR（layout=dual，与原先半屏算法同一套）。"""
+    """对一侧整屏图做 OCR（双摄 layout=double）。"""
     del base_date
     pfx = cam_log_prefix(side)
     try:
@@ -216,17 +193,15 @@ def _ocr_one_side(
         tag_prefix=tag_prefix,
         base_date=None,
         debug_dir=debug_dir,
-        layout="dual",
-        sanitize=sanitize if sanitize is not None else get_ocr_sanitize_cfg(),
+        layout="double",
         fix_decimal=(
             fix_decimal if fix_decimal is not None else get_ocr_fix_decimal_cfg()
         ),
-        early_stop=bool(ocr_cfg.get("early_stop", get_ocr_early_stop())),
-        early_stop_min_density=int(
-            ocr_cfg.get("early_stop_min_density", get_ocr_early_stop_min_density())
-        ),
+        auto_enable=bool(ocr_cfg.get("auto_enable", get_ocr_auto_enable())),
         max_ocr_width=max_ocr_width,
-        date_cfg=date_cfg if date_cfg is not None else get_ocr_date_cfg(layout="dual"),
+        date_cfg=date_cfg
+        if date_cfg is not None
+        else get_ocr_date_cfg(layout="double", side=side or "left"),
         table_crop=table_crop,
         onnx_threads=int(ocr_cfg.get("onnx_threads", get_ocr_onnx_threads())),
         log_prefix=pfx,
@@ -318,15 +293,11 @@ def ocr_side_images(
     """
     t_all = time.perf_counter()
     cfg = get_config()
-    screens = get_dual_defs(cfg)
+    screens = get_double_defs(cfg)
     cams = get_camera_defs(cfg)
     ocr_cfg = cfg.get("ocr") or {}
     workdir = resolve_ocr_workdir(cfg)
-    # 双摄 → ocr_runs/double/<时间戳>/{left,right}/；双屏拼缝仍用 dual/
-    capture_mode = get_capture_mode(cfg)
-    run_dir = new_ocr_run_dir(
-        "double" if capture_mode == "double" else "dual", cfg
-    )
+    run_dir = new_ocr_run_dir("double", cfg)
     auto_monitor = get_auto_monitor(cfg)
     min_points = get_ocr_min_points(cfg)
     capture_errors = dict(capture_errors or {})
@@ -372,7 +343,10 @@ def ocr_side_images(
         side_debug = run_dir / side
         side_debug.mkdir(parents=True, exist_ok=True)
         work_path, monitor_meta, monitor_path = prepare_monitor_work_image(
-            pane_path, side_debug, enabled=bool(auto_monitor)
+            pane_path,
+            side_debug,
+            enabled=bool(auto_monitor),
+            log_prefix=cam_log_prefix(side),
         )
         monitors[side] = {
             **(monitor_meta or {}),
@@ -405,10 +379,9 @@ def ocr_side_images(
             base_date=None,
             export_excel=export_excel,
             debug_dir=job["side_debug"],
-            sanitize=get_ocr_sanitize_cfg(cfg),
             fix_decimal=get_ocr_fix_decimal_cfg(cfg),
-            date_cfg=get_ocr_date_cfg(cfg, layout="dual", side=side),
-            table_crop=get_ocr_table_crop(cfg, layout="dual", side=side),
+            date_cfg=get_ocr_date_cfg(cfg, layout="double", side=side),
+            table_crop=get_ocr_table_crop(cfg, layout="double", side=side),
             side=side,
         )
         ms = _elapsed_ms(t_side)
@@ -416,14 +389,14 @@ def ocr_side_images(
         pts_n = len(ocr_dict.get("points") or [])
         timing = ocr_dict.get("timing") or {}
         logger.info(
-            "%s识别结束 ok=%s date=%s points=%s date_ms=%s table_ms=%s total_ms=%s",
+            "%s识别结束 ms=%s date_ms=%s table_ms=%s ok=%s date=%s points=%s",
             pfx,
+            ms,
+            timing.get("date_ms", 0),
+            timing.get("table_ms", 0),
             bool(ocr_dict.get("ok")),
             date_str,
             pts_n,
-            timing.get("date_ms", 0),
-            timing.get("table_ms", 0),
-            ms,
         )
         return side, ocr_dict, ms
 
@@ -520,10 +493,8 @@ def ocr_side_images(
     right_ok = bool(sides["right"].get("ok"))
     out: Dict[str, Any] = {
         "ok": left_ok or right_ok,
-        "mode": "dual",
-        "capture_mode": (
-            "double_camera" if get_capture_mode(cfg) == "double" else get_capture_mode(cfg)
-        ),
+        "mode": "double",
+        "capture_mode": "double_camera",
         "left": sides["left"],
         "right": sides["right"],
         "left_ok": left_ok,
@@ -626,7 +597,7 @@ def ocr_side_images(
         from .run_store import persist_pipeline_result
 
         return persist_pipeline_result(
-            out, mode="dual", trigger=trigger, started_at=None
+            out, mode="double", trigger=trigger, started_at=None
         )
     return out
 
@@ -698,12 +669,8 @@ def run_pipeline_dual(
     if not do_ocr:
         out = {
             "ok": True,
-            "mode": "dual",
-            "capture_mode": (
-                "double_camera"
-                if get_capture_mode(cfg) == "double"
-                else get_capture_mode(cfg)
-            ),
+            "mode": "double",
+            "capture_mode": "double_camera",
             "skipped_ocr": True,
             "capture": {
                 "left_image": left_path,
@@ -713,7 +680,7 @@ def run_pipeline_dual(
             "timing": {"capture_ms": capture_ms, "total_ms": _elapsed_ms(t_all)},
         }
         return persist_pipeline_result(
-            out, mode="dual", trigger=trigger, started_at=started_at
+            out, mode="double", trigger=trigger, started_at=started_at
         )
 
     result = ocr_side_images(
@@ -750,7 +717,7 @@ def run_pipeline_dual(
     timing["total_ms"] = _elapsed_ms(t_all)
     result["timing"] = timing
     return persist_pipeline_result(
-        result, mode="dual", trigger=trigger, started_at=started_at
+        result, mode="double", trigger=trigger, started_at=started_at
     )
 
 

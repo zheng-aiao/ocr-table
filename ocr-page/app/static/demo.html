@@ -597,6 +597,8 @@
      */
     function formatCell(v) {
       if (v == null || v === "") return "";
+      // 现场未出清：单元格为 "-"（非负号）
+      if (v === "-") return "-";
       const n = Number(v);
       if (!Number.isFinite(n)) return String(v);
       if (n === 0) return "0";
@@ -632,7 +634,13 @@
       return out;
     }
 
-    // 三组测试数据：1) 前两行全 0  2) 小电价  3) 含负数
+    // 四组测试数据：1) 前两行全 0  2) 小电价  3) 含负数  4) 某时刻后无数据(-)
+    function withNoDataAfter(row, cutoffHeader) {
+      const cut = DEFAULT_HEADERS.indexOf(cutoffHeader);
+      if (cut < 0) return row.slice();
+      return DEFAULT_HEADERS.map((_, i) => (i >= cut ? "-" : row[i]));
+    }
+
     const DATASETS = [
       {
         name: "1 · 前两行全0",
@@ -692,6 +700,38 @@
             return Math.round(v * 1000) / 1000;
           }),
         ],
+      },
+      {
+        // 模拟现场：已出清时段有数，未出清从某刻起整表显示 "-"
+        name: "4 · 无数据(-)",
+        headers: DEFAULT_HEADERS,
+        rows: (() => {
+          const cutoff = "18:45";
+          const priceAt = {
+            "16:30": 193.11,
+            "16:45": 201.131,
+            "17:00": 136.171,
+            "17:15": 134.994,
+            "17:30": 135.486,
+            "17:45": 152.072,
+            "18:00": 187.345,
+            "18:15": 187.997,
+            "18:30": 291.55,
+          };
+          const price = DEFAULT_HEADERS.map((h, i) => {
+            if (priceAt[h] != null) return priceAt[h];
+            const hour = (i + 1) * 0.25;
+            let v = 160 + 35 * Math.sin(i / 6);
+            if (hour >= 10 && hour <= 12) v += 40;
+            if (hour >= 14 && hour <= 16) v -= 25;
+            return Math.round(v * 1000) / 1000;
+          });
+          return [
+            withNoDataAfter(zeros(), cutoff),
+            withNoDataAfter(zeros(), cutoff),
+            withNoDataAfter(price, cutoff),
+          ];
+        })(),
       },
     ];
 

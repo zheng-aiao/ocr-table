@@ -92,9 +92,6 @@
     .imgs.hero {
       grid-template-columns: 1fr 1fr;
     }
-    .imgs.hero.hero-2x2 {
-      grid-template-columns: 1fr 1fr;
-    }
     .imgs.hero:has(> :only-child) {
       grid-template-columns: 1fr;
     }
@@ -103,8 +100,7 @@
       max-height: 360px;
     }
     @media (max-width: 860px) {
-      .imgs.hero,
-      .imgs.hero.hero-2x2 { grid-template-columns: 1fr; }
+      .imgs.hero { grid-template-columns: 1fr; }
     }
     .img-card {
       background: #0b1116;
@@ -1173,12 +1169,7 @@
       if (!ctx) return '';
       const meta = ctx.date_ocr || {};
       const bestUrl = ctx.date_best_url || meta.best_image_url || '';
-      const cropUrl = ctx.date_crop_url || meta.image_url || '';
-      const stages = Array.isArray(ctx.date_stages) ? ctx.date_stages : [];
-      const steps = Array.isArray(ctx.date_steps) && ctx.date_steps.length
-        ? ctx.date_steps
-        : (Array.isArray(ctx.date_candidates) ? ctx.date_candidates : []);
-      const hasImg = !!(bestUrl || cropUrl || stages.length || steps.length);
+      const hasImg = !!bestUrl;
       const dateOk = meta.ok === true || !!(ctx.base_date || meta.date_str);
       const baseDate = ctx.base_date || meta.date_str || '-';
       const source = ctx.date_source || meta.date_source || '-';
@@ -1192,80 +1183,6 @@
       const st = dateOk
         ? '<span class="badge ok">成功</span>'
         : '<span class="badge fail">失败</span>';
-      const winnerUrl = bestUrl || cropUrl;
-      const winnerCap = bestUrl ? '采用结果 date_crop_best' : '日期主裁剪 date_crop';
-
-      function itemMark(c) {
-        if (c.is_best || (c.ok && c.date_str)) {
-          return '<span class="badge ok" style="font-size:0.72rem;">采用</span>';
-        }
-        if (c.skipped) {
-          return '<span class="badge" style="font-size:0.72rem;">跳过</span>';
-        }
-        if (c.ok === false) {
-          return '<span class="badge fail" style="font-size:0.72rem;">未认出</span>';
-        }
-        return '';
-      }
-
-      function renderStepItem(c) {
-        if (!c || !c.image_url) return '';
-        const label = c.label || c.name || '过程图';
-        const hint = c.hint || '';
-        const file = c.name || '';
-        const safeUrl = String(c.image_url).replace(/"/g, '&quot;');
-        const safeCap = String(label + (file ? ' · ' + file : '')).replace(/"/g, '&quot;');
-        return `<div class="date-stage-item ${c.is_best ? 'winner' : ''}">
-          <div class="item-label">${label} ${itemMark(c)}</div>
-          <button type="button" class="preview-btn" data-preview-src="${safeUrl}" data-preview-cap="${safeCap}" title="点击大屏预览">
-            <img src="${safeUrl}" alt="${safeCap}" loading="lazy" />
-          </button>
-          ${hint ? `<div class="date-step-hint">${hint}</div>` : ''}
-          ${file ? `<div class="date-step-file">${file}</div>` : ''}
-        </div>`;
-      }
-
-      let processBlock = '';
-      if (stages.length) {
-        const stageFolds = stages.map((sg) => {
-          const items = Array.isArray(sg.items) ? sg.items : [];
-          const imgs = items.map(renderStepItem).filter(Boolean).join('');
-          if (!imgs) return '';
-          const n = items.filter((x) => x && x.image_url).length;
-          const okMark = sg.ok
-            ? '<span class="badge ok" style="font-size:0.72rem;">本阶段命中</span>'
-            : '';
-          return `<details class="date-stage-fold" open>
-            <summary>${sg.title || ''}（${n} 张）${okMark}</summary>
-            ${sg.hint ? `<div class="date-stage-hint">${sg.hint}</div>` : ''}
-            <div class="date-stage-grid">${imgs}</div>
-          </details>`;
-        }).join('');
-        processBlock = `<div class="date-steps-wrap"><div class="date-steps-title">识别过程（仅含已执行阶段）</div>${stageFolds}</div>`;
-      } else if (steps.length) {
-        // 兼容旧履历无 date_stages
-        const stepFolds = steps.map((c, idx) => {
-          if (!c || !c.image_url) return '';
-          const label = c.label || c.name || ('步骤' + (c.index ?? idx));
-          const safeUrl = String(c.image_url).replace(/"/g, '&quot;');
-          const safeCap = String(label + (c.name ? ' · ' + c.name : '')).replace(/"/g, '&quot;');
-          return `<details class="date-step-fold">
-            <summary>${label} ${itemMark(c)}</summary>
-            <div class="cand-card ${c.is_best ? 'winner' : ''}" style="max-width:420px;">
-              <button type="button" class="preview-btn" data-preview-src="${safeUrl}" data-preview-cap="${safeCap}" title="点击大屏预览">
-                <img src="${safeUrl}" alt="${safeCap}" loading="lazy" />
-              </button>
-              <div class="meta">
-                ${c.hint ? `<div class="date-step-hint">${c.hint}</div>` : ''}
-                ${c.name ? `<div class="date-step-file">${c.name}</div>` : ''}
-              </div>
-            </div>
-          </details>`;
-        }).join('');
-        processBlock = stepFolds
-          ? `<div class="date-steps-wrap"><div class="date-steps-title">识别过程（${steps.length} 步，仅含已执行）</div>${stepFolds}</div>`
-          : '';
-      }
 
       return `<section class="sub-card">
         <h3>日期 OCR ${st}</h3>
@@ -1276,8 +1193,7 @@
           ${message && !dateOk ? `<div class="date-meta" style="color:var(--err);">${message}</div>` : ''}
           ${raw ? `<div class="date-meta">原文：${raw}</div>` : ''}
         </div>
-        <div class="imgs">${imgCard(winnerUrl, winnerCap)}</div>
-        ${processBlock}
+        ${bestUrl ? `<div class="imgs">${imgCard(bestUrl, 'date_best.jpg')}</div>` : ''}
       </section>`;
     }
 
@@ -1400,27 +1316,21 @@
               const right = run.right || {};
               const leftSrc = run.left_capture_url || left.source_url || '';
               const rightSrc = run.right_capture_url || right.source_url || '';
-              const leftMon = left.monitor_url || left.image_url || '';
-              const rightMon = right.monitor_url || right.image_url || '';
-              // 仅双摄履历用 2×2；普通 dual 仍用整帧源图+屏内图
+              // 双摄总画面只放一行左右原图；有效区域在下方左右栏展示
               const isDouble = run.capture_mode === 'double_camera'
                 || run.mode === 'double'
                 || !!(run.left_capture_url || run.right_capture_url);
-              if (isDouble && (leftSrc || rightSrc || leftMon || rightMon)) {
+              if (isDouble && (leftSrc || rightSrc)) {
                 const lTag = left.tag || 'L';
                 const rTag = right.tag || 'R';
                 const cell = (url, cap) => imgCard(url, cap) || `<div class="img-card"><div class="cap">${cap}（无）</div></div>`;
-                return `<div class="imgs hero hero-2x2">
+                return `<div class="imgs hero">
                   ${cell(leftSrc, `左 · 原图（${lTag}）`)}
                   ${cell(rightSrc, `右 · 原图（${rTag}）`)}
-                  ${cell(leftMon, '左 · 有效区域')}
-                  ${cell(rightMon, '右 · 有效区域')}
                 </div>
                 <div class="links" style="margin-top:10px;">
                   ${copyPathBtn(run.left_capture_path || left.source_path, '复制左原图路径')}
                   ${copyPathBtn(run.right_capture_path || right.source_path, '复制右原图路径')}
-                  ${copyPathBtn(left.monitor_path || left.image_path, '复制左有效区域路径')}
-                  ${copyPathBtn(right.monitor_path || right.image_path, '复制右有效区域路径')}
                   ${run.excel_url ? `<a href="${run.excel_url}" target="_blank">下载 Excel</a>` : ''}
                 </div>`;
               }

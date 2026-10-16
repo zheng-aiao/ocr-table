@@ -47,10 +47,10 @@ def get_schedule_cfg(cfg: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
 
     enabled = bool(raw.get("enabled", False))
     try:
-        interval = int(raw.get("interval_minutes", 15) or 15)
+        interval = int(raw.get("interval_sec", 10) or 0)
     except (TypeError, ValueError):
-        interval = 15
-    interval = max(1, interval)
+        interval = 10
+    interval = max(0, interval)
 
     capture = bool(raw.get("capture", True))
     ocr = bool(raw.get("ocr", True))
@@ -62,7 +62,7 @@ def get_schedule_cfg(cfg: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
 
     return {
         "enabled": enabled,
-        "interval_minutes": interval,
+        "interval_sec": interval,
         "capture": capture,
         "ocr": ocr,
         "pi": pi,
@@ -85,7 +85,7 @@ def get_auto_monitor(cfg: Optional[Dict[str, Any]] = None) -> bool:
     """
     是否先裁显示器有效区域再 OCR。
     只认 capture.auto_monitor；缺省 false（与 config.yaml 一致，不裁则用整图）。
-    兼容旧键：capture.single.auto_monitor / capture.dual.auto_monitor。
+    兼容旧键：capture.double / dual / single 下的 auto_monitor。
     """
     cfg = cfg or get_config()
     cap = cfg.get("capture") or {}
@@ -93,12 +93,10 @@ def get_auto_monitor(cfg: Optional[Dict[str, Any]] = None) -> bool:
         return False
     if "auto_monitor" in cap:
         return bool(cap.get("auto_monitor"))
-    single = cap.get("single") or {}
-    if isinstance(single, dict) and "auto_monitor" in single:
-        return bool(single.get("auto_monitor"))
-    dual = cap.get("dual") or {}
-    if isinstance(dual, dict) and "auto_monitor" in dual:
-        return bool(dual.get("auto_monitor"))
+    for key in ("double", "dual", "single"):
+        block = cap.get(key) or {}
+        if isinstance(block, dict) and "auto_monitor" in block:
+            return bool(block.get("auto_monitor"))
     return False
 
 
@@ -353,7 +351,10 @@ def get_pi_value_max(cfg: Optional[Dict[str, Any]] = None) -> Optional[float]:
 def get_pi_date_back_days(cfg: Optional[Dict[str, Any]] = None) -> int:
     """OCR 识别日相对写 PI 日期提前的天数：1=提前一天，0=当天不提前。"""
     cfg = cfg or get_config()
-    raw = (cfg.get("ocr") or {}).get("pi_date_back_days", 1)
+    pi = cfg.get("pi") or {}
+    ocr = cfg.get("ocr") or {}
+    # 优先 pi.pi_date_back_days；兼容旧配置 ocr.pi_date_back_days
+    raw = pi.get("pi_date_back_days", ocr.get("pi_date_back_days", 1))
     try:
         n = int(raw)
     except (TypeError, ValueError):
@@ -371,26 +372,14 @@ def get_ocr_min_points(cfg: Optional[Dict[str, Any]] = None) -> int:
     return max(0, n)
 
 
-def get_ocr_early_stop(cfg: Optional[Dict[str, Any]] = None) -> bool:
+def get_ocr_auto_enable(cfg: Optional[Dict[str, Any]] = None) -> bool:
     """
-    裁剪竞选是否允许提前结束。
-    true（默认）：先行候选表头可用且列数≥4 即跳过后续（不要求数据行填满）。
-    false：始终两边都跑。
-    """
-    cfg = cfg or get_config()
-    return bool((cfg.get("ocr") or {}).get("early_stop", True))
-
-
-def get_ocr_early_stop_min_density(cfg: Optional[Dict[str, Any]] = None) -> int:
-    """
-    旧 early_stop 密度门槛（百分数），现已不参与判定；保留读取以兼容旧配置。
+    是否允许 auto 裁剪回退。
+    true（默认）：先跑 fixed；表头不可用或列数不足时再跑 auto。
+    false：只跑 fixed，不再跑 auto。
     """
     cfg = cfg or get_config()
-    try:
-        n = int((cfg.get("ocr") or {}).get("early_stop_min_density", 100))
-    except (TypeError, ValueError):
-        n = 100
-    return max(50, min(100, n))
+    return bool((cfg.get("ocr") or {}).get("auto_enable", True))
 
 
 def get_ocr_skip_full_when_ok(cfg: Optional[Dict[str, Any]] = None) -> bool:
@@ -402,35 +391,28 @@ def get_ocr_skip_full_when_ok(cfg: Optional[Dict[str, Any]] = None) -> bool:
 def get_ocr_table_crop(
     cfg: Optional[Dict[str, Any]] = None,
     *,
-    layout: str = "single",
+    layout: str = "double",
     side: Optional[str] = None,
 ) -> Tuple[float, float, float, float]:
     """
-    表格固定比例裁剪（相对当前送入图：双屏=半屏，单屏=整图）。
+    表格固定比例裁剪（双摄：相对各侧有效区域图）。
 
-    优先级：
-    dual → capture.dual.{side}.table_crop → ocr.table_crop → 内置默认
-    single → capture.single.table_crop → ocr.table_crop → 内置默认
+    优先级：capture.double.{side}.table_crop → ocr.table_crop → 内置默认
+    （兼容读旧键 capture.dual）
     """
+    del layout
     cfg = cfg or get_config()
-    mode = "dual" if str(layout).strip().lower() == "dual" else "single"
-    default = (
-        (0.02, 0.52, 0.985, 0.90) if mode == "dual" else (0.10, 0.52, 0.995, 0.90)
-    )
+    default = (0.02, 0.52, 0.985, 0.90)
     crop: Optional[Tuple[float, float, float, float]] = None
     cap = cfg.get("capture") or {}
-    if mode == "dual":
-        dual = cap.get("dual") or {}
-        side_key = (side or "left").strip().lower()
-        if side_key not in ("left", "right"):
-            side_key = "left"
-        side_cfg = dual.get(side_key) or {}
-        crop = parse_crop(str(side_cfg.get("table_crop") or ""))
-        if crop is None:
-            crop = parse_crop(str(dual.get("table_crop") or ""))
-    else:
-        single = get_single_cfg(cfg)
-        crop = parse_crop(str(single.get("table_crop") or ""))
+    block = cap.get("double") or cap.get("dual") or {}
+    side_key = (side or "left").strip().lower()
+    if side_key not in ("left", "right"):
+        side_key = "left"
+    side_cfg = block.get(side_key) or {}
+    crop = parse_crop(str(side_cfg.get("table_crop") or ""))
+    if crop is None:
+        crop = parse_crop(str(block.get("table_crop") or ""))
     if crop is None:
         crop = parse_crop(str((cfg.get("ocr") or {}).get("table_crop") or ""))
     return crop if crop is not None else default
@@ -488,85 +470,48 @@ def get_ocr_onnx_threads(cfg: Optional[Dict[str, Any]] = None) -> int:
     return max(1, min(n, max_per_side))
 
 
-# 日期 OCR：enabled / scale 固定写死；优先自动找「日期」标签，date_crop 仅作回退
+# 日期 OCR：enabled / scale 固定写死；date_crop = 搜索带（双摄）
 _DATE_OCR_ENABLED = True
 _DATE_OCR_SCALE = 1.0
-_DATE_OCR_AUTO_LOCATE = True
-_DEFAULT_DATE_CROP_SINGLE = (0.14, 0.10, 0.48, 0.26)  # 整图回退：偏高矮，躲开曲线 Y 轴
-_DEFAULT_DATE_CROP_DUAL = (0.0, 0.16, 0.48, 0.26)  # 半屏回退：标题下方日期框（双屏保持原值）
+# 默认搜索带：顶栏附近窄带（相对有效区域图）
+_DEFAULT_DATE_SEARCH_BAND = (0.02, 0.02, 0.55, 0.34)
 
 
 def get_ocr_date_cfg(
     cfg: Optional[Dict[str, Any]] = None,
     *,
-    layout: str = "single",
+    layout: str = "double",
     side: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
-    左上角「日期」筛选框 OCR。
-    默认先 OCR 定位「日期」再裁右侧筛选框；失败才用
-    capture.single.date_crop / capture.dual.{left|right}.date_crop。
-    相对当前送入图（双屏=半屏；单屏=整图）。enabled/scale 代码写死。
+    双摄日期 OCR 配置。
+    capture.double.{left|right}.date_crop = 搜索带（相对有效区域图）；
+    流程：搜索带直接认 YYYY-MM-DD → 否则裁「日期」右侧再认 → 否则失败。
+    （兼容读旧键 capture.dual）
     """
+    del layout
     cfg = cfg or get_config()
-    mode = "dual" if str(layout).strip().lower() == "dual" else "single"
-    default = (
-        _DEFAULT_DATE_CROP_DUAL if mode == "dual" else _DEFAULT_DATE_CROP_SINGLE
-    )
     crop: Optional[Tuple[float, float, float, float]] = None
     cap = cfg.get("capture") or {}
-    if mode == "dual":
-        dual = cap.get("dual") or {}
-        side_key = str(side or "left").strip().lower()
-        if side_key not in ("left", "right"):
-            side_key = "left"
-        side_cfg = dual.get(side_key) or {}
-        if isinstance(side_cfg, dict):
-            crop = parse_crop(str(side_cfg.get("date_crop") or ""))
-        # 左右共用：capture.dual.date_crop
-        if crop is None:
-            crop = parse_crop(str(dual.get("date_crop") or ""))
-    else:
-        single = get_single_cfg(cfg)
-        crop = parse_crop(str(single.get("date_crop") or ""))
-
-    # 兼容旧 ocr.date
-    legacy = (cfg.get("ocr") or {}).get("date") or {}
-    if not isinstance(legacy, dict):
-        legacy = {}
+    block = cap.get("double") or cap.get("dual") or {}
+    side_key = str(side or "left").strip().lower()
+    if side_key not in ("left", "right"):
+        side_key = "left"
+    side_cfg = block.get(side_key) or {}
+    if isinstance(side_cfg, dict):
+        crop = parse_crop(str(side_cfg.get("date_crop") or ""))
     if crop is None:
-        crop = parse_crop(str(legacy.get("crop") or ""))
+        crop = parse_crop(str(block.get("date_crop") or ""))
     if crop is None:
-        crop = default
-
-    auto_locate = _DATE_OCR_AUTO_LOCATE
-    if "auto_locate" in legacy:
-        auto_locate = bool(legacy.get("auto_locate"))
-    ocr_cfg = cfg.get("ocr") or {}
-    if isinstance(ocr_cfg, dict) and "date_auto_locate" in ocr_cfg:
-        auto_locate = bool(ocr_cfg.get("date_auto_locate"))
-
-    extra_crops: List[Tuple[float, float, float, float]] = []
-    for item in legacy.get("crops") or []:
-        if isinstance(item, str):
-            p = parse_crop(item)
-            if p:
-                extra_crops.append(p)
-        elif isinstance(item, (list, tuple)) and len(item) == 4:
-            try:
-                extra_crops.append(
-                    (float(item[0]), float(item[1]), float(item[2]), float(item[3]))
-                )
-            except (TypeError, ValueError):
-                continue
+        crop = _DEFAULT_DATE_SEARCH_BAND
     return {
         "enabled": _DATE_OCR_ENABLED,
-        "crop": crop,
-        "crops": extra_crops,
+        "crop": crop,  # 搜索带
+        "crops": [],
         "scale": _DATE_OCR_SCALE,
-        "layout": mode,
-        "side": side,
-        "auto_locate": auto_locate,
+        "layout": "double",
+        "side": side_key,
+        "auto_locate": True,
     }
 
 
@@ -591,38 +536,6 @@ def get_ocr_fix_decimal_cfg(cfg: Optional[Dict[str, Any]] = None) -> Dict[str, A
     return {
         "enabled": bool(raw.get("enabled", True)),
         "ratio_k": ratio_k,
-    }
-
-
-def get_ocr_sanitize_cfg(cfg: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-    """
-    OCR 同行量级清洗配置。
-    返回：enabled / ratio_k / min_samples。
-    仅对整数为主的电力/计划行做比值清洗；电价行不清洗。
-    位数众数硬删已废弃（对电价尖峰误杀）；旧键 majority_ratio/boundary_pct 忽略。
-    """
-    cfg = cfg or get_config()
-    raw = (cfg.get("ocr") or {}).get("sanitize") or {}
-    if not isinstance(raw, dict):
-        raw = {}
-    enabled = bool(raw.get("enabled", True))
-
-    def _f(key: str, default: float) -> float:
-        try:
-            return float(raw.get(key, default))
-        except (TypeError, ValueError):
-            return default
-
-    def _i(key: str, default: int) -> int:
-        try:
-            return int(raw.get(key, default))
-        except (TypeError, ValueError):
-            return default
-
-    return {
-        "enabled": enabled,
-        "ratio_k": max(1.0, _f("ratio_k", 3.0)),
-        "min_samples": max(2, _i("min_samples", 4)),
     }
 
 

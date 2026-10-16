@@ -133,6 +133,7 @@ def _scan_date_crop_paths(arts: str) -> List[str]:
         return []
     out: List[str] = []
     for name in (
+        "date_search.jpg",
         "date_locate.jpg",
         "date_crop.jpg",
         "date_crop_anchor.jpg",
@@ -141,6 +142,8 @@ def _scan_date_crop_paths(arts: str) -> List[str]:
         p = d / name
         if p.is_file():
             out.append(str(p))
+    for p in sorted(d.glob("date_search_*.jpg")):
+        out.append(str(p))
     for p in sorted(d.glob("date_crop_enlarge_*.jpg")):
         out.append(str(p))
     for p in sorted(d.glob("date_crop_cfg_enlarge_*.jpg")):
@@ -148,6 +151,7 @@ def _scan_date_crop_paths(arts: str) -> List[str]:
     # 旧命名 date_crop_XX（排除已收录的别名）
     known = {Path(x).name.lower() for x in out}
     known.add("date_crop_best.jpg")
+    known.add("date_best.jpg")
     for p in sorted(d.glob("date_crop_*.jpg")):
         n = p.name.lower()
         if n in known:
@@ -161,12 +165,19 @@ def _scan_date_crop_paths(arts: str) -> List[str]:
 def _date_step_meta(path: str) -> Dict[str, str]:
     """按文件名给日期过程图打角色标签（展示用）。"""
     name = Path(path).name.lower()
+    if name == "date_search.jpg" or name.startswith("date_search_"):
+        return {
+            "role": "search",
+            "stage": "locate_main",
+            "label": "搜索带",
+            "hint": "config date_crop 搜索带 OCR",
+        }
     if name == "date_locate.jpg":
         return {
             "role": "locate",
             "stage": "locate_main",
-            "label": "定位框",
-            "hint": "auto 找到的日期+筛选框",
+            "label": "标签右侧",
+            "hint": "「日期」标签右侧输入区",
         }
     if name == "date_crop.jpg":
         return {
@@ -365,6 +376,10 @@ def _humanize_date_reason(reason: Any, date_source: Any = None) -> str:
     src = str(date_source or "").strip()
     if not r and src == "ocr":
         return "OCR 识别成功"
+    if r.startswith("full_ymd_search_band") or r.startswith("full_ymd_label_same_row"):
+        return "搜索带直接认出完整日期"
+    if r.startswith("full_ymd_label_right"):
+        return "标签右侧认出完整日期"
     if r.startswith("full_ymd_auto_locate"):
         return "自定位主框认出完整日期"
     if r.startswith("full_ymd_crop"):
@@ -418,188 +433,24 @@ def _date_fields_for_ui(
     base_date: Any = None,
     date_source: Any = None,
 ) -> Dict[str, Any]:
-    """日期 OCR 展示：主结果图 + 三阶段识别过程（仅已执行）。"""
+    """日期 OCR 展示：UI 只展示 date_best.jpg。"""
     meta = dict(date_ocr or {}) if isinstance(date_ocr, dict) else {}
     arts = str(artifacts_dir or "").strip()
 
     best = str(meta.get("best_image_path") or "").strip()
     if not best and arts:
-        cand = resolve_project_path(arts) / "date_crop_best.jpg"
-        if cand.is_file():
-            best = str(cand)
+        for name in ("date_best.jpg", "date_crop_best.jpg"):
+            cand = resolve_project_path(arts) / name
+            if cand.is_file():
+                best = str(cand)
+                break
 
-    primary = str(meta.get("image_path") or "").strip()
-    attempts = meta.get("attempts") if isinstance(meta.get("attempts"), list) else []
-    locate_meta = meta.get("locate") if isinstance(meta.get("locate"), dict) else {}
-
-    # 按三阶段收集 items
-    buckets: Dict[str, List[Dict[str, Any]]] = {
-        "locate_main": [],
-        "enlarge": [],
-        "config": [],
-    }
-    seen_urls: set[str] = set()
-
-    def _push(stage_key: str, item: Dict[str, Any]) -> None:
-        url = str(item.get("image_url") or "")
-        if url and url in seen_urls:
-            return
-        if url:
-            seen_urls.add(url)
-        buckets.setdefault(stage_key, []).append(item)
-
-    # —— 阶段1：定位图（若有）
-    loc_path = str((locate_meta or {}).get("image_path") or "").strip()
-    if not loc_path and arts:
-        p = resolve_project_path(arts) / "date_locate.jpg"
-        if p.is_file():
-            loc_path = str(p)
-    locate_ok = bool(
-        loc_path
-        and locate_meta
-        and locate_meta.get("ok") is not False
-        and (locate_meta.get("crop") or locate_meta.get("method"))
-    )
-    if locate_ok:
-        sm = _date_step_meta(loc_path)
-        _push(
-            "locate_main",
-            _make_step_item(
-                path=loc_path,
-                url=_web_url(loc_path),
-                label=sm["label"],
-                hint=sm["hint"],
-                role=sm["role"],
-                stage="locate_main",
-                ok=True,
-            ),
-        )
-
-    def _is_best_path(p: str, att: Optional[Dict[str, Any]] = None) -> bool:
-        if att and att.get("ok") and att.get("date_str"):
-            return True
-        if not p or not best:
-            return False
-        try:
-            return Path(p).resolve() == Path(best).resolve()
-        except Exception:
-            return Path(p).name == Path(best).name
-
-    stop = False
-    if attempts:
-        for att in attempts:
-            if not isinstance(att, dict) or stop:
-                continue
-            # 增强轮与首轮同框，不重复展示
-            if att.get("enhance"):
-                if att.get("ok") and att.get("date_str"):
-                    stop = True
-                continue
-            stage_key = _stage_key_from_attempt(att)
-            # 无自定位时，phase0 主框归入配置退回
-            if (
-                stage_key == "locate_main"
-                and not locate_ok
-                and str(att.get("stage") or "") != "auto_main"
-            ):
-                stage_key = "config"
-            p = str(att.get("image_path") or "").strip()
-            url = _web_url(p) if p else ""
-            lab = _attempt_item_label(att, stage_key)
-            _push(
-                stage_key,
-                _make_step_item(
-                    path=p,
-                    url=url,
-                    label=lab.get("label") or "",
-                    hint=lab.get("hint") or "",
-                    role=lab.get("role") or "",
-                    stage=stage_key,
-                    ok=bool(att.get("ok")),
-                    is_best=_is_best_path(p, att),
-                    skipped=str(att.get("skipped") or ""),
-                    date_str=str(att.get("date_str") or ""),
-                ),
-            )
-            if att.get("ok") and att.get("date_str"):
-                stop = True
-    else:
-        # 旧履历：按文件名归入三阶段
-        for p in _paths_reached_for_date_ui(meta, arts):
-            n = Path(p).name.lower()
-            if n == "date_locate.jpg":
-                if locate_ok:
-                    continue  # 已在上面处理
-                sm = _date_step_meta(p)
-                _push(
-                    "locate_main",
-                    _make_step_item(
-                        path=p,
-                        url=_web_url(p),
-                        label=sm["label"],
-                        hint=sm["hint"],
-                        role=sm["role"],
-                        stage="locate_main",
-                        ok=True,
-                    ),
-                )
-                continue
-            sm = _date_step_meta(p)
-            sk = str(sm.get("stage") or "enlarge")
-            if not sk:
-                continue
-            _push(
-                sk,
-                _make_step_item(
-                    path=p,
-                    url=_web_url(p),
-                    label=sm["label"],
-                    hint=sm["hint"],
-                    role=sm["role"],
-                    stage=sk,
-                    ok=bool(meta.get("ok")),
-                    is_best=_is_best_path(p),
-                ),
-            )
-
-    # 组装 date_stages（只含已执行）
-    date_stages: List[Dict[str, Any]] = []
-    date_steps: List[Dict[str, Any]] = []
-    step_i = 0
-    for defn in _STAGE_DEFS:
-        items = buckets.get(defn["key"]) or []
-        if not items:
-            continue
-        # 放大尝试编号：按顺序改成 1..N
-        if defn["key"] == "enlarge":
-            for j, it in enumerate(items, start=1):
-                if str(it.get("role") or "") in ("enlarge", "neighbor"):
-                    it["label"] = f"放大尝试 {j}"
-        staged_items = []
-        for it in items:
-            row = dict(it)
-            row["index"] = step_i
-            step_i += 1
-            staged_items.append(row)
-            date_steps.append(row)
-        any_ok = any(bool(it.get("ok") and it.get("date_str")) or it.get("is_best") for it in staged_items)
-        date_stages.append(
-            {
-                "key": defn["key"],
-                "title": defn["title"],
-                "hint": defn["hint"],
-                "ok": any_ok,
-                "items": staged_items,
-            }
-        )
-
-    date_candidates = list(date_steps)
-
-    if meta.get("image_path"):
-        meta["image_url"] = _web_url(meta.get("image_path"))
+    best_url = _web_url(best) if best else ""
     if best:
         meta["best_image_path"] = best
-        meta["best_image_url"] = _web_url(best)
+        meta["best_image_url"] = best_url
+        meta["image_path"] = best
+        meta["image_url"] = best_url
 
     src = date_source or meta.get("date_source") or ""
     reason = meta.get("reason") or ""
@@ -610,14 +461,13 @@ def _date_fields_for_ui(
         "date_source": src,
         "date_ocr": meta,
         "date_reason_label": reason_label,
-        "date_crop_path": primary or (date_steps[-1]["image_path"] if date_steps else ""),
-        "date_crop_url": _web_url(primary)
-        or (date_steps[-1]["image_url"] if date_steps else ""),
+        "date_crop_path": best,
+        "date_crop_url": best_url,
         "date_best_path": best,
-        "date_best_url": _web_url(best),
-        "date_stages": date_stages,
-        "date_steps": date_steps,
-        "date_candidates": date_candidates,
+        "date_best_url": best_url,
+        "date_stages": [],
+        "date_steps": [],
+        "date_candidates": [],
     }
 
 

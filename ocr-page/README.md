@@ -47,7 +47,7 @@ ocr.bat install
 - `camera.*`：相机 IP / 账号 / 通道（默认 `101`）
 - `capture.mode`：`single` / `dual`，与下方 `capture.single` / `capture.dual` 对应
 - `capture.single.tag` / `crop`：单屏测点与裁剪；`capture.dual.*.tag/crop`：双屏左右
-- `schedule`：定时处置（`enabled` / `interval_minutes` / `capture` / `ocr` / `pi`）；开启后立刻跑一轮，之后按间隔触发；上一轮未完成则跳过；阶段开关任一为 false 则该阶段及之后不执行
+- `schedule`：定时处置（`enabled` / `interval_sec` / `capture` / `ocr` / `pi`）；开启后立刻跑一轮，本轮结束后再等 `interval_sec` 秒开始下一周期；阶段开关任一为 false 则该阶段及之后不执行
 - `pi.*`：`dll_dir`（默认 `app/pidll/`）、服务器、账号
 - `ocr.min_points`：有效点数绝对下限；低于则本轮（双屏为该侧）识别失败、不写 PI，等下一轮
 
@@ -103,7 +103,7 @@ ocr.bat start
 | GET | `/api/config/view` | 读 `capture.mode` / `single` / `dual` |
 | GET | `/api/schedule` | 定时处置配置与运行状态 |
 | POST | `/api/schedule/run` | 立刻执行一轮定时处置（按 schedule.capture/ocr/pi 截断） |
-| GET | `/api/curve?start=&end=` | 读 PI 曲线 |
+| GET | `/api/curve?start=&end=` | 读 PI 测点档案时间与值，有多少返回多少 |
 | POST | `/api/pi/write` | 写点列表；可选 `tag` 前缀 |
 | GET | `/api/config/pi` | 读当前测点前缀等 |
 | PUT | `/api/config/pi/tag` | 更新 `capture.single.tag`（单屏前缀） |
@@ -118,6 +118,6 @@ ocr.bat start
 - OCR 质量：`ocr.min_points`（默认 8）。有效点数不足视为切屏/熄屏/模糊等失败：**不写 PI**；双屏左右各自判断，合格侧照常写
 - 抓图目录 `data/captures/YYYYMMDD/`，文件名按时刻：`9-09.jpg`、`10-20.jpg`（Windows 不能用 `:`，用 `-`；同分钟重复为 `_2`…）；外层日期 + 文件名即完整时间
 - OCR 过程中间文件：`ocr.artifacts_dir`（默认 `data/ocr_runs/`，始终落盘，无开关）
-- 定时处置：`schedule.enabled=true` 后立刻跑第一轮，再每隔 `interval_minutes` 尝试下一轮（上一轮未完则跳过）；按 `schedule.capture` / `ocr` / `pi` 截断执行；改 YAML 后下个周期热加载
+- 定时处置：`schedule.enabled=true` 后立刻跑第一轮，本轮结束后再等 `interval_sec` 秒开始下一周期；按 `schedule.capture` / `ocr` / `pi` 截断执行；改 YAML 后下一轮前热加载
 - Excel 备份：`excel.enabled` / `excel.dir`，按日分区 `data/exports/YYYYMMDD/`（写 PI **不读** Excel）
 - 通道拍不到目标画面时改 `camera.channel`
