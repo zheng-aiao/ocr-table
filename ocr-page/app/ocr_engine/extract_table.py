@@ -657,7 +657,7 @@ class TableImageExtractor:
 
         img_w = int(img.shape[1]) if img is not None else 0
         header_idx, headers, col_centers = self._extract_header_info(
-            rows, img_width=img_w
+            rows, img_width=img_w, img=img
         )
         data_idx, data_cells = self._find_main_data_row(rows, header_idx)
         # 拍屏时同一数据行常被拆成多行，合并后再对齐
@@ -676,7 +676,7 @@ class TableImageExtractor:
                     image_path=str(img_path),
                 )
             headers, col_centers = self._infer_headers_fallback(
-                rows, data_cells, img_w
+                rows, data_cells, img_w, img=img
             )
             if len(headers) < 4:
                 return TableExtractResult(
@@ -720,17 +720,31 @@ class TableImageExtractor:
                 ]
         # 先按 X 回填空格，空格再局部 OCR；识别结果原样保留（异常值不置空）
         matrix = self._fill_sparse_data_row(matrix, data_cells, col_centers, col_count)
+        # 先清表头时刻泄漏（23:00→23.00），再判是否整表未出清
+        matrix = self._scrub_header_time_leaks(headers, matrix)
+        # 初看全空时仍先做一轮列补识：真实「全 0 + 电价」常被整图漏检，
+        # 若直接当未出清跳过，会把可见数据整表置空。补识后再判定。
+        looked_empty = self._matrix_looks_all_uncleared(matrix, col_count)
         matrix = self._refill_matrix_empties(
             img, matrix, rows, header_idx, data_idx, data_cells, col_centers
         )
-        # 引擎宽框粘连：不按位数猜拆，对被盖住的列做单列裁剪 OCR
-        matrix = self._reocr_geometry_sticky_cells(
-            img, matrix, rows, header_idx, data_idx, data_cells, col_centers
-        )
-        # 电价行可疑已填格（漏点/串位）按列强制重识，可覆盖错值
-        matrix = self._reocr_suspicious_price_cells(
-            img, matrix, rows, header_idx, data_idx, data_cells, col_centers
-        )
+        matrix = self._scrub_header_time_leaks(headers, matrix)
+        if self._matrix_looks_all_uncleared(matrix, col_count):
+            # 补识后仍无真实功率/电价：视为屏上未出清（全 -），禁止再粘连/电价重识
+            # （否则易把表头读成 22.30）；保留表头时刻，数据置空不写 PI
+            matrix = [[""] * col_count for _ in range(self.EXPECTED_DATA_ROWS)]
+        else:
+            # 引擎宽框粘连：不按位数猜拆，对被盖住的列做单列裁剪 OCR
+            matrix = self._reocr_geometry_sticky_cells(
+                img, matrix, rows, header_idx, data_idx, data_cells, col_centers
+            )
+            # 电价行可疑已填格（漏点/串位）按列强制重识，可覆盖错值
+            matrix = self._reocr_suspicious_price_cells(
+                img, matrix, rows, header_idx, data_idx, data_cells, col_centers
+            )
+            if looked_empty:
+                # 补识前全空、补识后有值：再 scrub 一次表头泄漏
+                matrix = self._scrub_header_time_leaks(headers, matrix)
         ocr_filled = self._count_numeric_cells(matrix)
         headers, matrix = self._trim_trailing_empty_and_broken_headers(
             headers, matrix
@@ -741,8 +755,11 @@ class TableImageExtractor:
         )
         # 电力/计划（整型）与电价（小数）混行时拆开
         matrix = self._untangle_integer_decimal_rows(matrix)
+        # 表头时刻泄漏进数据格（22:30→22.30）清掉，再判未出清
+        matrix = self._scrub_header_time_leaks(headers, matrix)
         # 前两行常为全 0：整图检测极易漏检；表头几何分带 + 按列小图 OCR / 墨点 / 业务先验补全
         # （不依赖左侧行名——横向滚动后行名可能不可见）
+        # 整表/末段未出清时内部会跳过补 0
         matrix = self._recover_leading_zero_data_rows(
             img,
             matrix,
@@ -750,10 +767,13 @@ class TableImageExtractor:
             rows=rows,
             header_idx=header_idx,
             data_cells=data_cells,
+            headers=headers,
         )
         # 漏点补救：5 位、4 位都按同行锚点双候选选优（6 位已在 _fix_decimal_ocr）
         if self.fix_decimal_enabled:
             matrix = [self._apply_decimal_row_repairs(r) for r in matrix]
+        matrix = self._scrub_header_time_leaks(headers, matrix)
+        matrix = self._force_uncleared_columns_empty(headers, matrix)
         matrix = self._strip_nodata_marks(matrix)
         ocr_filled = self._count_numeric_cells(matrix)
 
@@ -1112,29 +1132,103 @@ class TableImageExtractor:
         right = left + float(cell.width or 0)
         return left <= pad or right >= float(img_width) - pad
 
+    def _glyph_run_widths(self, img: np.ndarray, cell: OcrCell) -> List[int]:
+        """单元格内横向墨迹段宽度（每个可见字符一段）。"""
+        if img is None or img.size == 0:
+            return []
+        h, w = img.shape[:2]
+        x0 = max(0, int(math.floor(float(cell.x))))
+        y0 = max(0, int(math.floor(float(cell.y))))
+        x1 = min(w, int(math.ceil(float(cell.x) + float(cell.width or 0))))
+        y1 = min(h, int(math.ceil(float(cell.y) + float(cell.height or 0))))
+        if x1 - x0 < 8 or y1 - y0 < 6:
+            return []
+        crop = img[y0:y1, x0:x1]
+        gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY) if crop.ndim == 3 else crop
+        bg = cv2.GaussianBlur(gray, (0, 0), 2)
+        ink = (bg.astype(np.int16) - gray.astype(np.int16)) > 14
+        occ = ink.sum(axis=0)
+        thr = max(2, int(0.18 * ink.shape[0]))
+        xs = np.where(occ >= thr)[0]
+        if len(xs) == 0:
+            return []
+        widths: List[int] = []
+        start = prev = int(xs[0])
+        for x in xs[1:]:
+            x = int(x)
+            if x - prev > 2:
+                widths.append(prev - start + 1)
+                start = x
+            prev = x
+        widths.append(prev - start + 1)
+        return widths
+
+    def _leading_glyph_clipped(
+        self,
+        img: np.ndarray,
+        cell: OcrCell,
+        others: Sequence[OcrCell],
+    ) -> bool:
+        """最左时刻的首位笔画是否明显细于其余列的首位（裁掉半个 1）。
+
+        正常列的「1」宽度接近；左缘只剩一条细缝时，OCR 仍可能读成完整 10:15。
+        只跟其它列的首位笔画比，避免被 0/5 等宽字拉高中位数。
+        """
+        if img is None or not others:
+            return False
+        own = self._glyph_run_widths(img, cell)
+        if not own:
+            return False
+        leads: List[int] = []
+        for other in others:
+            runs = self._glyph_run_widths(img, other)
+            if runs:
+                leads.append(int(runs[0]))
+        if len(leads) < 3:
+            return False
+        med = float(np.median(leads))
+        if med < 3.0:
+            return False
+        lead = float(own[0])
+        return lead + 1.5 < med and lead < med * 0.65
+
     def _row_time_candidates(
         self,
         row: Sequence[OcrCell],
         *,
         img_width: int = 0,
+        img: Optional[np.ndarray] = None,
     ) -> List[Tuple[str, float]]:
-        """收集行内时刻；贴边且小时非两位的残片直接丢弃。"""
+        """收集行内时刻；小时非两位、贴齐裁切线、或最左列首位被裁的残片一律丢弃。
+
+        现货表头固定零填充 HH:MM（04:00）。裁切半列时常读成 4:00，
+        若仅在「贴边」时才丢，框稍离边缘仍会被 _normalize_time 补成 04:00 误用。
+        另：首位只裁一丁点时框并不贴画布，OCR 仍可能读成完整 10:15——
+        仅最左列、且首位墨迹明显细于其余列时不采纳。
+        """
+        time_cells = [
+            c
+            for c in row
+            if self._raw_time_hour_digit_count(c.text) is not None
+            or self._normalize_time(c.text)
+        ]
+        leftmost = min(time_cells, key=lambda c: c.x) if time_cells else None
+        drop_left = False
+        if leftmost is not None and img is not None:
+            drop_left = self._leading_glyph_clipped(
+                img, leftmost, [c for c in time_cells if c is not leftmost]
+            )
         times: List[Tuple[str, float]] = []
-        widths = [float(c.width or 0) for c in row if c.width and c.width > 0]
-        med_w = float(np.median(widths)) if widths else 0.0
         for cell in row:
             hour_digits = self._raw_time_hour_digit_count(cell.text)
             touches = self._cell_touches_image_edge(cell, img_width)
-            # 贴边 + 小时非两位（1:15 / 115）→ 半列残片，不采纳
-            if touches and hour_digits is not None and hour_digits < 2:
+            # 小时非两位（4:00 / 1:15 / 115）→ 识别不全，整列不采用
+            if hour_digits is not None and hour_digits < 2:
                 continue
-            # 贴边且框明显偏窄（相对同行时刻框）→ 半列
-            if (
-                touches
-                and med_w > 8
-                and float(cell.width or 0) < med_w * 0.72
-                and hour_digits is not None
-            ):
+            # 贴齐裁切线：半截仍读成两位也丢
+            if touches and hour_digits is not None:
+                continue
+            if drop_left and cell is leftmost:
                 continue
             norm = self._normalize_time(cell.text)
             if norm:
@@ -1146,6 +1240,7 @@ class TableImageExtractor:
         rows: Sequence[List[OcrCell]],
         *,
         img_width: int = 0,
+        img: Optional[np.ndarray] = None,
     ) -> Tuple[int, List[str], List[float]]:
         """
         提取表头行、时间列名、列中心 X。
@@ -1158,7 +1253,7 @@ class TableImageExtractor:
         best_key: Tuple[float, float, float, int] = (-1e9, -1.0, -1.0, -1)
         best_times: List[Tuple[str, float]] = []
         for idx, row in enumerate(rows):
-            times = self._row_time_candidates(row, img_width=img_width)
+            times = self._row_time_candidates(row, img_width=img_width, img=img)
             if len(times) < 2:
                 continue
             ratio = len(times) / max(len(row), 1)
@@ -1205,7 +1300,7 @@ class TableImageExtractor:
                 if abs(self._row_y_center(row) - base_y) > y_tol:
                     continue
                 # 邻行若几乎全是大步时刻（曲线轴），勿并入
-                neigh = self._row_time_candidates(row, img_width=img_width)
+                neigh = self._row_time_candidates(row, img_width=img_width, img=img)
                 if not neigh:
                     continue
                 neigh_mins = [
@@ -1484,6 +1579,7 @@ class TableImageExtractor:
         rows: Sequence[List[OcrCell]],
         data_cells: List[OcrCell],
         img_width: int,
+        img: Optional[np.ndarray] = None,
     ) -> Tuple[List[str], List[float]]:
         """表头行弱时：汇总偏下方、且步长像 15 分钟的时刻（不编造模板）。"""
         del data_cells
@@ -1495,7 +1591,7 @@ class TableImageExtractor:
             if yc > max_y:
                 max_y = yc
         for row in rows:
-            times = self._row_time_candidates(row, img_width=img_width)
+            times = self._row_time_candidates(row, img_width=img_width, img=img)
             if len(times) < 3:
                 continue
             mins = [
@@ -1512,7 +1608,7 @@ class TableImageExtractor:
             times_all: List[Tuple[str, float]] = []
             for row in rows:
                 times_all.extend(
-                    self._row_time_candidates(row, img_width=img_width)
+                    self._row_time_candidates(row, img_width=img_width, img=img)
                 )
             dedup0 = self._dedupe_header_times_prefer_delta15(times_all, x_tol=25.0)
             if len(dedup0) < 4:
@@ -1688,9 +1784,18 @@ class TableImageExtractor:
             joined = " ".join(c.text for c in row)
             if self._is_footer_text(joined):
                 continue
+            # 整行都是时刻表头碎片：不是数据行
+            if row and all(
+                self._normalize_time(c.text) or not str(c.text).strip() for c in row
+            ):
+                continue
             token_n = 0
             magnitude = 0.0
             for c in row:
+                if self._normalize_time(c.text):
+                    continue
+                if self._is_footer_text(c.text):
+                    continue
                 for part in self._split_cell_values(c.text):
                     token_n += 1
                     try:
@@ -1706,8 +1811,22 @@ class TableImageExtractor:
                 best_idx = idx
                 best_cells = row
         if best_idx < 0 and rows:
-            best_idx = len(rows) - 1
-            best_cells = rows[-1]
+            # 禁止回落到页脚 / 纯时刻行——否则会拆出 133、23.00 等伪数
+            for idx in range(len(rows) - 1, start - 1, -1):
+                row = rows[idx]
+                joined = " ".join(c.text for c in row)
+                if self._is_footer_text(joined):
+                    continue
+                if row and all(
+                    self._normalize_time(c.text) or not str(c.text).strip()
+                    for c in row
+                ):
+                    continue
+                best_idx = idx
+                best_cells = list(row)
+                break
+            if best_idx < 0:
+                return -1, []
         return best_idx, best_cells
 
     def _merge_fragmented_data_rows(
@@ -3293,6 +3412,103 @@ class TableImageExtractor:
         cy = float(ys.mean()) / max(gray.shape[0], 1)
         return 0.22 <= cx <= 0.78 and 0.18 <= cy <= 0.82
 
+    def _cell_is_uncleared_token(self, raw: object) -> bool:
+        """空 / 横杠 / NODATA / 仅 0 → 视为未出清占位（非真实功率/电价）。"""
+        if raw is None:
+            return True
+        s = str(raw).strip()
+        if not s or s == self.NODATA_MARK or self._is_lone_dash(s):
+            return True
+        if s in ("0", "0.0", "0.00", "0.000", "-0", "-0.0"):
+            return True
+        # OCR 把横杠/噪点读成 00
+        if re.fullmatch(r"0+", s):
+            return True
+        return False
+
+    def _value_looks_like_header_time(self, raw: object, header: str) -> bool:
+        """数据格是否像把表头时刻读进来（22:30→22.30 / 23:00→23.00）。"""
+        h = str(header or "").strip()
+        s = str(raw or "").strip().replace("：", ":")
+        if not h or not s or s in ("0", self.NODATA_MARK):
+            return False
+        hm = self._time_to_minutes(h)
+        if hm is None:
+            return False
+        # 直接读成时刻
+        if self._normalize_time(s) == self._minutes_to_time(hm):
+            return True
+        # 冒号被读成小数点：22.30 / 23.00（分必须两位）
+        m = re.fullmatch(r"-?(\d{1,2})\.(\d{2})", s)
+        if not m:
+            return False
+        try:
+            hh, mm = int(m.group(1)), int(m.group(2))
+        except ValueError:
+            return False
+        if mm not in (0, 15, 30, 45):
+            return False
+        if hh > 24 or (hh == 24 and mm != 0):
+            return False
+        return hh * 60 + mm == hm
+
+    def _scrub_header_time_leaks(
+        self, headers: Sequence[str], matrix: List[List[str]]
+    ) -> List[List[str]]:
+        """清掉数据区里误读成表头时刻的格子。"""
+        if not matrix or not headers:
+            return matrix
+        out = [list(r) for r in matrix]
+        for ri, row in enumerate(out):
+            for ci in range(min(len(row), len(headers))):
+                if self._value_looks_like_header_time(row[ci], headers[ci]):
+                    out[ri][ci] = self.NODATA_MARK
+        return out
+
+    def _matrix_looks_all_uncleared(
+        self, matrix: Sequence[Sequence[str]], ncols: int
+    ) -> bool:
+        """
+        整表像未出清（屏上全 -）：无真实功率/电价。
+
+        OCR 常认不出细横杠，格子为空；或已被误补成 0 / 表头泄漏小数。
+        矩阵为空（未识别到任何数据行）也视为未出清，避免再列 OCR / 补 0。
+        """
+        if ncols <= 0:
+            return False
+        if not matrix:
+            return True
+        for row in matrix:
+            padded = (list(row) + [""] * max(0, ncols - len(row)))[:ncols]
+            for raw in padded:
+                if self._cell_is_uncleared_token(raw):
+                    continue
+                # 仍可能是表头泄漏，交给 scrub 后再判；此处有其它数字则不算全未出清
+                return False
+        return True
+
+    def _force_uncleared_columns_empty(
+        self, headers: Sequence[str], matrix: List[List[str]]
+    ) -> List[List[str]]:
+        """按未出清列（含整表全 -）强制置空，禁止残留 0 / 泄漏时刻。"""
+        if not matrix or not headers:
+            return matrix
+        ncols = len(headers)
+        out = [list(r) for r in matrix]
+        for r in out:
+            while len(r) < ncols:
+                r.append("")
+            del r[ncols:]
+        nodata = self._trailing_nodata_columns(out, ncols)
+        if len(nodata) < ncols and self._matrix_looks_all_uncleared(out, ncols):
+            nodata = set(range(ncols))
+        if not nodata:
+            return out
+        for ri in range(len(out)):
+            for ci in nodata:
+                out[ri][ci] = ""
+        return out
+
     def _trailing_nodata_columns(
         self, matrix: Sequence[Sequence[str]], ncols: int
     ) -> set:
@@ -3301,7 +3517,7 @@ class TableImageExtractor:
 
         业务：0=该时刻真实零值（写 PI）；-=尚未到点/无数据（置空、不写 PI）。
         屏上未出清时三行同为 -；电价行空而电力行被误补成 0 时，仍按电价行截断。
-        电价行完全无值时不判定（避免整表失败误杀）。
+        电价行完全无真实值且上两行也无真实功率 → 整表未出清（全列）。
         """
         if not matrix or ncols <= 0:
             return set()
@@ -3311,9 +3527,15 @@ class TableImageExtractor:
         last_filled = -1
         for c, raw in enumerate(price):
             s = str(raw).strip() if raw is not None else ""
-            if s and s != "-" and s != self.NODATA_MARK:
-                last_filled = c
+            if not s or s == "-" or s == self.NODATA_MARK:
+                continue
+            if self._cell_is_uncleared_token(s):
+                continue
+            last_filled = c
         if last_filled < 0:
+            # 整表未出清（全 - / 全空 / 仅误补 0）：所有列置空，禁止补 0
+            if self._matrix_looks_all_uncleared(matrix, ncols):
+                return set(range(ncols))
             return set()
         return set(range(last_filled + 1, ncols))
 
@@ -3364,13 +3586,14 @@ class TableImageExtractor:
         rows: Sequence[List[OcrCell]],
         header_idx: int,
         data_cells: Sequence[OcrCell],
+        headers: Optional[Sequence[str]] = None,
     ) -> List[List[str]]:
         """
         恢复前两行易漏检的全 0 数据行。
 
         锚点：时刻表头 Y（无行名依赖，横向滚动后仍可用）。
         电价行保持末行；上方行空/过稀则补 0，并清除多数零行里的 1/2 噪点。
-        末段未出清（-）列不补 0，置空以便 PI 跳过。
+        末段/整表未出清（-）列不补 0，置空以便 PI 跳过。
         """
         if not col_centers:
             return matrix
@@ -3382,6 +3605,8 @@ class TableImageExtractor:
         ncols = len(col_centers)
         out = [list(r) + [""] * max(0, ncols - len(r)) for r in matrix]
         out = [r[:ncols] for r in out]
+        if headers:
+            out = self._scrub_header_time_leaks(headers, out)
 
         # 经典单电价：小数沉底。多小数指标行保持 band/Y 序，禁止互调
         ratios = [self._row_decimal_fill_ratio(r) for r in out]
@@ -3394,6 +3619,9 @@ class TableImageExtractor:
             out[price_i], out[-1] = out[-1], out[price_i]
 
         nodata_cols = self._trailing_nodata_columns(out, ncols)
+        # 整表未出清：直接置空返回，禁止前两行补 0
+        if len(nodata_cols) >= ncols:
+            return [[""] * ncols for _ in out]
 
         header_y, row_h = self._resolve_header_anchor_y(
             rows, header_idx, data_cells, img.shape[0], out, col_centers
@@ -3660,6 +3888,11 @@ class TableImageExtractor:
         max_dist = max(step * 0.60, 28.0)
 
         for cell in self._filter_overlap_noise_cells(row):
+            if self._is_footer_text(cell.text):
+                continue
+            # 时刻表头碎片禁止落入数据格（否则 23:00→23.00）
+            if self._normalize_time(cell.text):
+                continue
             covered = self._columns_covered_by_cell(cell, col_centers, step)
             # 单列整格只有「-」：记为无数据，禁止后续单列重识
             if self._is_lone_dash(cell.text):
@@ -4657,6 +4890,9 @@ class TableImageExtractor:
         """
         if not text or not text.strip():
             return ""
+        # 页脚「显示第1到第3条记录」禁止拆成 133 等伪数
+        if self._is_footer_text(text):
+            return ""
         t = text.strip().replace("O", "0").replace("o", "0")
         # 统一各类短横线 / 负号字符，便于后续判断
         t = (
@@ -5099,7 +5335,9 @@ class TableImageExtractor:
             return sum(
                 1
                 for r in rows
-                if j < len(r) and str(r[j]).strip() not in ("", "-", "—", "–", "−")
+                if j < len(r)
+                and str(r[j]).strip()
+                not in ("", "-", "—", "–", "−", self.NODATA_MARK)
             )
 
         # 从右去掉全空列
@@ -5107,7 +5345,8 @@ class TableImageExtractor:
         while last >= 0 and _filled(last) == 0:
             last -= 1
         if last < 0:
-            return [], []
+            # 整表数据空（屏上全 -）：保留时刻表头，数据保持空，供未出清逻辑使用
+            return list(headers), [list(r) for r in rows]
         headers = headers[: last + 1]
         rows = [r[: last + 1] for r in rows]
 

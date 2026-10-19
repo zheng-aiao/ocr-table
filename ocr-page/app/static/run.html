@@ -1180,9 +1180,12 @@
       if (!hasImg && meta.ok !== true && meta.ok !== false && !ctx.base_date && !reason) {
         return '';
       }
-      const st = dateOk
-        ? '<span class="badge ok">成功</span>'
-        : '<span class="badge fail">失败</span>';
+      const isSystem = String(source) === 'system';
+      const st = isSystem
+        ? '<span class="badge partial">系统日</span>'
+        : dateOk
+          ? '<span class="badge ok">成功</span>'
+          : '<span class="badge fail">失败</span>';
 
       return `<section class="sub-card">
         <h3>日期 OCR ${st}</h3>
@@ -1190,7 +1193,7 @@
           <div class="date-value">${baseDate}</div>
           <div class="date-meta">来源：${source}${reasonLabel ? ` · ${reasonLabel}` : ''}</div>
           ${reason && reasonLabel !== reason ? `<div class="date-meta" style="opacity:.75;">码：${reason}</div>` : ''}
-          ${message && !dateOk ? `<div class="date-meta" style="color:var(--err);">${message}</div>` : ''}
+          ${message && (!dateOk || isSystem) ? `<div class="date-meta" style="color:var(--err);">${message}</div>` : ''}
           ${raw ? `<div class="date-meta">原文：${raw}</div>` : ''}
         </div>
         ${bestUrl ? `<div class="imgs">${imgCard(bestUrl, 'date_best.jpg')}</div>` : ''}
@@ -1212,9 +1215,12 @@
         : '<span class="badge fail">未达下限</span>';
       const exp = ctx.expected_cells != null ? ctx.expected_cells : '-';
       const gapN = Number(ctx.gap_filled || 0) || 0;
-      const dateFailed = !!(ctx.date_ocr && ctx.date_ocr.ok === false)
-        || String(ctx.date_source || '') === 'failed'
-        || String(ctx.reason || '').startsWith('date');
+      const dateSrc = String(ctx.date_source || '');
+      const dateFailed = dateSrc !== 'system' && dateSrc !== 'ocr' && (
+        !!(ctx.date_ocr && ctx.date_ocr.ok === false)
+        || dateSrc === 'failed'
+        || String(ctx.reason || '').startsWith('date')
+      );
       const gapNote = gapN > 0
         ? `<p class="gap-legend"><span class="swatch"></span>同伴补录 ${gapN} 格（高亮 · 悬停查看来源候选）；胜出原值不覆盖</p>`
         : '';

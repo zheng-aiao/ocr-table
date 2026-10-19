@@ -8,7 +8,7 @@ cameras:
   left:
     type: isapi
     host: "192.168.16.64"
-    tag: "GX.DEMO.OCR.L"
+    tag: "GXPC.OCR.L"
     port: 80
     user: "admin"
     password: "Sdyw@192"
@@ -17,7 +17,7 @@ cameras:
   right:
     type: mvs
     host: "192.168.16.6"
-    tag: "GX.DEMO.OCR.R"
+    tag: "GXPC.OCR.R"
     timeout_sec: 15
     # MVS：本机连接相机的网卡 IP（枚举匹配失败时按 IP 直连用）
     net_export: ""
@@ -53,6 +53,12 @@ ocr:
   auto_enable: true
   parallel_sides: true
   onnx_threads: 2
+  # 日期识别开关：true=跑画面日期 OCR；false=不识别，直接用本机系统日(年月日)继续表格 OCR
+  date_ocr_enabled: false
+  # 仅当 date_ocr_enabled=true 且日期识别失败时生效：
+  #   true=用本机系统日继续表格 OCR 并写 PI（时分仍取表头；写库日仍按 pi.pi_date_back_days 提前）
+  #   false=跳过表格 OCR、不写 PI（原逻辑）
+  date_fallback_system: true
   # 中间产物：double / YYYYMMDD_HHMMSS_mmm/{left|right}/
   artifacts_dir: "data/ocr_runs"
   fix_decimal:
@@ -68,9 +74,9 @@ pi:
   # 测点前缀见 cameras.*.tag
   dll_dir: "app/pidll"
   dll_name: "piapi.dll"
-  server: "192.168.2.230"
+  server: "10.168.160.240"
   user: "piadmin"
-  password: "Hdpi-6018"
+  password: ""
   verify_write: true
   value_max: 1000
   # 写 PI 业务日 = OCR 识别日向前退几天；1=提前一天，0=当天

@@ -374,6 +374,10 @@ def _humanize_date_reason(reason: Any, date_source: Any = None) -> str:
     """把 reason 码转成简短中文说明。"""
     r = str(reason or "").strip()
     src = str(date_source or "").strip()
+    if r == "date_ocr_disabled" and src == "system":
+        return "日期 OCR 已关闭，已用系统日"
+    if src == "system":
+        return "日期 OCR 失败，已用系统日"
     if not r and src == "ocr":
         return "OCR 识别成功"
     if r.startswith("full_ymd_search_band") or r.startswith("full_ymd_label_same_row"):

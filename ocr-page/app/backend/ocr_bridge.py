@@ -127,7 +127,7 @@ class OcrResult:
     gap_filled: int = 0
     # 业务日：画面左上角日期 OCR（履历展示用）；写库时间戳按 pi_date_back_days 提前
     base_date: str = ""
-    date_source: str = ""  # ocr | failed | disabled
+    date_source: str = ""  # ocr | system | failed
     date_ocr: Dict[str, Any] = field(default_factory=dict)
     # 分阶段耗时（毫秒）：date_ms / table_ms / 各候选 ocr_ms
     timing: Dict[str, Any] = field(default_factory=dict)
@@ -1661,9 +1661,10 @@ def resolve_business_date(
     log_prefix: str = "",
 ) -> Tuple[Optional[datetime], str, Dict[str, Any]]:
     """
-    业务日只认画面左上角日期 OCR；不再回退接口/本机日。
+    业务日优先画面左上角日期 OCR。
+    ocr.date_ocr_enabled=false 时不跑识别，直接返回本机系统日（source=system）。
     fallback_date 保留参数兼容，忽略。
-    返回 (date_or_None, source, date_ocr_payload)；source 为 ocr / failed / disabled。
+    返回 (date_or_None, source, date_ocr_payload)；source 为 ocr / failed / system。
     """
     del fallback_date
     from .config import get_ocr_date_cfg
@@ -1671,10 +1672,17 @@ def resolve_business_date(
     pfx = str(log_prefix or "")
     cfg = date_cfg if date_cfg is not None else get_ocr_date_cfg()
     if not cfg.get("enabled", True):
-        return None, "disabled", {
-            "ok": False,
+        today = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+        date_str = today.strftime("%Y-%m-%d")
+        logger.info("%s日期 OCR 已关闭(date_ocr_enabled=false)，用系统日 %s", pfx, date_str)
+        return today, "system", {
+            "ok": True,
             "reason": "date_ocr_disabled",
-            "message": "日期 OCR 已关闭，无法识别业务日期",
+            "message": f"日期 OCR 已关闭，使用系统日 {date_str}",
+            "date": today,
+            "date_str": date_str,
+            "fallback": "system",
+            "skipped": True,
         }
 
     primary = cfg.get("crop")
@@ -2048,6 +2056,23 @@ def _row_numeric_median(row: Sequence[Any]) -> Optional[float]:
     return float(vals[mid - 1] + vals[mid]) / 2.0
 
 
+def _winner_looks_all_uncleared(rows: Sequence[Sequence[Any]]) -> bool:
+    """
+    胜出表像整表未出清（屏上全 -）：无真实数值。
+
+    此时禁止同伴回填，否则弱候选的 133/22.30 等噪声会灌进空表。
+    """
+    if not rows:
+        return False
+    for row in rows:
+        for cell in row:
+            s = str(cell).strip() if cell is not None else ""
+            if not s or s in ("0", "0.0", "0.00", "0.000", "-0", "-0.0", "-"):
+                continue
+            return False
+    return True
+
+
 def _gap_fill_from_peer_candidates(
     headers: List[str],
     rows: List[List[str]],
@@ -2065,6 +2090,9 @@ def _gap_fill_from_peer_candidates(
     ncols = len(headers) if headers else 0
     gap_map: List[List[str]] = [[""] * ncols for _ in (rows or [])]
     if not headers or not rows or not peers:
+        return [list(r) for r in rows], 0, gap_map
+    # 整表未出清：保持全空，不让同伴噪声填进来
+    if _winner_looks_all_uncleared(rows):
         return [list(r) for r in rows], 0, gap_map
     out = [list(r) for r in rows]
     filled_n = 0
@@ -2218,7 +2246,10 @@ def extract_points_from_image(
     auto_enable=False：只跑 fixed，fixed 不够好也不再跑 auto。
     skip_full_when_ok 已废弃（不再跑整图 full），保留参数兼容旧调用。
 
-    业务日只认左上角日期 OCR（完整年月日）；识别失败则整次失败并跳过表格 OCR。
+    业务日优先左上角日期 OCR（完整年月日）。
+    ocr.date_ocr_enabled=false：跳过日期识别，直接用本机系统日继续表格 OCR。
+    ocr.date_ocr_enabled=true 且识别失败：若 ocr.date_fallback_system=true，
+    用本机系统日继续表格 OCR；否则整次失败并跳过表格 OCR。
     """
     del data_row_index
     del skip_full_when_ok
@@ -2262,13 +2293,17 @@ def extract_points_from_image(
     if run_dir is not None:
         run_dir.mkdir(parents=True, exist_ok=True)
 
-    # base_date 入参已废弃（兼容保留）；业务日只走画面 OCR，不猜测/不对侧回填
+    # base_date 入参已废弃（兼容保留）；业务日只走画面 OCR / 系统日开关，不猜测/不对侧回填
     del base_date
     if date_cfg is None:
         from .config import get_ocr_date_cfg
 
         date_cfg = get_ocr_date_cfg(layout=layout_mode)
-    logger.info("%s日期识别 开始", pfx)
+    date_enabled = bool((date_cfg or {}).get("enabled", True))
+    if date_enabled:
+        logger.info("%s日期识别 开始", pfx)
+    else:
+        logger.info("%s日期识别 已关闭，跳过 OCR 直接用系统日", pfx)
     resolved_date, date_source, date_ocr_meta = resolve_business_date(
         image_path=image_path,
         workdir=workdir,
@@ -2292,25 +2327,64 @@ def extract_points_from_image(
     if date_ocr_meta.get("date") is not None and not date_ocr_out.get("date_str"):
         date_ocr_out["date_str"] = date_ocr_meta["date"].strftime("%Y-%m-%d")
 
-    if date_source != "ocr" or resolved_date is None:
-        logger.warning(
-            "%s日期识别 ms=%s 失败 source=%s reason=%s — 跳过表格识别",
+    if date_source == "system" and resolved_date is not None:
+        # date_ocr_enabled=false，或后续扩展的其它系统日路径
+        base_date_str = resolved_date.strftime("%Y-%m-%d")
+        logger.info(
+            "%s日期识别 ms=%s 使用系统日 date=%s reason=%s",
             pfx,
             date_ms,
-            date_source,
+            base_date_str,
             date_ocr_out.get("reason"),
         )
-        return _empty_date_fail_result(
-            image_path=image_path,
-            run_dir=run_dir,
-            artifacts=artifacts,
-            date_source=date_source,
-            date_ocr_out=date_ocr_out,
-            timing={"date_ms": date_ms, "table_ms": 0, "ocr_ms": date_ms},
-        )
+    elif date_source != "ocr" or resolved_date is None:
+        use_system = bool((date_cfg or {}).get("fallback_system", False))
+        if not use_system:
+            try:
+                from .config import get_ocr_date_fallback_system
 
-    base_date_str = resolved_date.strftime("%Y-%m-%d")
-    logger.info("%s日期识别 ms=%s 成功 date=%s", pfx, date_ms, base_date_str)
+                use_system = get_ocr_date_fallback_system()
+            except Exception:
+                use_system = False
+        if use_system:
+            resolved_date = datetime.now().replace(
+                hour=0, minute=0, second=0, microsecond=0
+            )
+            date_source = "system"
+            base_date_str = resolved_date.strftime("%Y-%m-%d")
+            date_ocr_out = dict(date_ocr_out)
+            date_ocr_out["fallback"] = "system"
+            date_ocr_out["date_str"] = base_date_str
+            date_ocr_out["message"] = (
+                str(date_ocr_out.get("message") or "未识别到左上角业务日期")
+                + f"；已启用 date_fallback_system，用系统日 {base_date_str} 继续表格 OCR"
+            )
+            logger.warning(
+                "%s日期识别 ms=%s 失败 reason=%s — 回退系统日 %s 继续表格识别",
+                pfx,
+                date_ms,
+                date_ocr_out.get("reason"),
+                base_date_str,
+            )
+        else:
+            logger.warning(
+                "%s日期识别 ms=%s 失败 source=%s reason=%s — 跳过表格识别",
+                pfx,
+                date_ms,
+                date_source,
+                date_ocr_out.get("reason"),
+            )
+            return _empty_date_fail_result(
+                image_path=image_path,
+                run_dir=run_dir,
+                artifacts=artifacts,
+                date_source=date_source,
+                date_ocr_out=date_ocr_out,
+                timing={"date_ms": date_ms, "table_ms": 0, "ocr_ms": date_ms},
+            )
+    else:
+        base_date_str = resolved_date.strftime("%Y-%m-%d")
+        logger.info("%s日期识别 ms=%s 成功 date=%s", pfx, date_ms, base_date_str)
 
     crop_candidates: List[Tuple[str, Optional[Tuple[float, float, float, float]]]] = list(
         _default_crop_candidates(table_crop=table_crop)
@@ -2400,7 +2474,7 @@ def extract_points_from_image(
     ) -> bool:
         """
         fixed 是否够格，够格则不再跑 auto。
-        表头可用且列数够；若上两行像摩尔纹假读（11/4/1/111），视为不够。
+        表头可用、列数够、且至少有填格；若上两行像摩尔纹假读，视为不够。
         """
         if sc[0] < 3:
             return False
@@ -2408,6 +2482,9 @@ def extract_points_from_image(
         # 抓拍半屏常只有 5~6 列有效，门槛用 4（勿用 7）
         n_headers = len(list(headers or []))
         if n_headers < 4:
+            return False
+        # 只认出表头、数据全空：不算够（常见于漏检 0/电价），交给 auto 再裁一刀
+        if int(sc[2]) <= 0:
             return False
         row_list = list(rows or [])
         # 电力/计划行（末行电价除外）若像全 0 被读成垃圾，不算够

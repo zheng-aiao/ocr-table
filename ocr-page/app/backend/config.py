@@ -470,11 +470,30 @@ def get_ocr_onnx_threads(cfg: Optional[Dict[str, Any]] = None) -> int:
     return max(1, min(n, max_per_side))
 
 
-# 日期 OCR：enabled / scale 固定写死；date_crop = 搜索带（双摄）
-_DATE_OCR_ENABLED = True
+# 日期 OCR：scale 固定；enabled 读 ocr.date_ocr_enabled；date_crop = 搜索带（双摄）
 _DATE_OCR_SCALE = 1.0
 # 默认搜索带：顶栏附近窄带（相对有效区域图）
 _DEFAULT_DATE_SEARCH_BAND = (0.02, 0.02, 0.55, 0.34)
+
+
+def get_ocr_date_ocr_enabled(cfg: Optional[Dict[str, Any]] = None) -> bool:
+    """
+    是否跑画面日期 OCR。
+    true（默认）：识别左上角业务日。
+    false：跳过日期识别，直接用本机系统日继续表格 OCR。
+    """
+    cfg = cfg or get_config()
+    return bool((cfg.get("ocr") or {}).get("date_ocr_enabled", True))
+
+
+def get_ocr_date_fallback_system(cfg: Optional[Dict[str, Any]] = None) -> bool:
+    """
+    仅当 date_ocr_enabled=true 且日期 OCR 失败时生效：
+    true：用本机系统日（年月日）继续表格 OCR 并写 PI（时分仍取表头；写库日仍按 pi.pi_date_back_days 提前）。
+    false（默认）：跳过表格 OCR、不写 PI。
+    """
+    cfg = cfg or get_config()
+    return bool((cfg.get("ocr") or {}).get("date_fallback_system", False))
 
 
 def get_ocr_date_cfg(
@@ -485,6 +504,8 @@ def get_ocr_date_cfg(
 ) -> Dict[str, Any]:
     """
     双摄日期 OCR 配置。
+    ocr.date_ocr_enabled：是否跑日期识别（false 则直接用系统日）。
+    ocr.date_fallback_system：识别失败时是否回退系统日。
     capture.double.{left|right}.date_crop = 搜索带（相对有效区域图）；
     流程：搜索带直接认 YYYY-MM-DD → 否则裁「日期」右侧再认 → 否则失败。
     （兼容读旧键 capture.dual）
@@ -505,13 +526,14 @@ def get_ocr_date_cfg(
     if crop is None:
         crop = _DEFAULT_DATE_SEARCH_BAND
     return {
-        "enabled": _DATE_OCR_ENABLED,
+        "enabled": get_ocr_date_ocr_enabled(cfg),
         "crop": crop,  # 搜索带
         "crops": [],
         "scale": _DATE_OCR_SCALE,
         "layout": "double",
         "side": side_key,
         "auto_locate": True,
+        "fallback_system": get_ocr_date_fallback_system(cfg),
     }
 
 

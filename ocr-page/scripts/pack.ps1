@@ -1,4 +1,4 @@
-param(
+﻿param(
   [Parameter(Mandatory = $true)][string]$OutZip,
   [Parameter(Mandatory = $true)][ValidateSet("update", "all")][string]$Mode
 )
