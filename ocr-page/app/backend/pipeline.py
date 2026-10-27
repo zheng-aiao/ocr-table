@@ -10,22 +10,19 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from .config import (
+    get_camera_table_search,
     get_capture_tag,
     get_config,
-    get_ocr_date_cfg,
-    get_ocr_auto_enable,
     get_ocr_max_width,
     get_ocr_min_points,
     get_ocr_fix_decimal_cfg,
     get_ocr_scale,
-    get_ocr_table_crop,
     get_ocr_onnx_threads,
     get_pi_value_max,
     new_ocr_run_dir,
     resolve_ocr_workdir,
 )
 from .excel_export import export_ocr_excel
-from .monitor_crop import prepare_monitor_work_image
 from .ocr_bridge import extract_points_from_image, ocr_result_to_dict, row_tag_name
 from .pi_client import get_pi_client
 
@@ -61,54 +58,67 @@ def evaluate_ocr_point_count(
     return out
 
 
-def capture_only() -> Dict[str, Any]:
-    """调试：并行抓两路摄像头，并预裁有效区域（auto_monitor）供联调预览。"""
-    from .camera_common import cam_log_prefix
-    from .config import get_auto_monitor, resolve_project_path
-    from .monitor_crop import prepare_monitor_work_image
-    from .pipeline_dual import capture_dual_cameras, get_camera_defs
+def resolve_ocr_fail_fields(
+    quality: Dict[str, Any],
+    ocr: Optional[Dict[str, Any]] = None,
+) -> Dict[str, str]:
+    """
+    点数不足时的对外失败字段：优先蒙板/表格定位等具体原因，
+    避免一律显示「有效点数 0 < min_points」。
+    """
+    ocr = ocr or {}
+    crop_msg = str(ocr.get("table_crop_fallback_message") or "").strip()
+    crop_reason = str(ocr.get("table_crop_fallback_reason") or "").strip()
+    ocr_msg = str(ocr.get("message") or "").strip()
+    ocr_reason = str(ocr.get("reason") or "").strip()
+    q_msg = str(quality.get("message") or "").strip()
+    q_reason = str(quality.get("reason") or "points_below_min").strip()
 
+    def _is_generic_points(msg: str) -> bool:
+        return ("min_points" in msg) or msg.startswith("OCR 有效点数")
+
+    # 1) 表格区域/蒙板：最具体
+    if crop_msg:
+        return {
+            "reason": crop_reason or ocr_reason or "table_crop_failed",
+            "message": crop_msg,
+        }
+    # 2) OCR 引擎已给出非点数类原因
+    if ocr_msg and not _is_generic_points(ocr_msg):
+        return {
+            "reason": ocr_reason or q_reason or "table_ocr_failed",
+            "message": ocr_msg,
+        }
+    # 3) 退回点数门槛说明
+    return {
+        "reason": q_reason or "points_below_min",
+        "message": q_msg
+        or ocr_msg
+        or "OCR 有效点数不足，本轮识别失败，不写 PI",
+    }
+
+
+def capture_only() -> Dict[str, Any]:
+    """调试：并行抓两路摄像头。识别直接用整图，不预裁显示器有效区域。"""
+    from .pipeline_dual import capture_dual_cameras, get_camera_defs
     cfg = get_config()
     cams = get_camera_defs(cfg)
     captured = capture_dual_cameras(cfg)
-    auto_monitor = get_auto_monitor(cfg)
-
-    # 预览裁剪落盘到当日 captures/_preview/<ts>/
-    from datetime import datetime as _dt
-
-    preview_root = (
-        Path(resolve_project_path((cfg.get("capture") or {}).get("dir", "data/captures")))
-        / _dt.now().strftime("%Y%m%d")
-        / "_preview"
-        / _dt.now().strftime("%H%M%S_%f")
-    )
-    preview_root.mkdir(parents=True, exist_ok=True)
 
     sides_out: Dict[str, Any] = {}
     for side in ("left", "right"):
         cam = cams[side]
         src = captured.get(side)
-        item: Dict[str, Any] = {
+        sides_out[side] = {
             "image_path": str(src) if src else "",
             "monitor_path": "",
+            "work_image_path": str(src) if src else "",
             "host": cam.get("host"),
             "type": cam.get("type"),
             "tag": cam.get("tag"),
             "size": src.stat().st_size if src else 0,
+            "monitor": {"ok": True, "mode": "skipped", "enabled": False},
         }
-        if src and src.is_file():
-            side_dir = preview_root / side
-            side_dir.mkdir(parents=True, exist_ok=True)
-            work_path, mon_meta, mon_str = prepare_monitor_work_image(
-                src,
-                side_dir,
-                enabled=bool(auto_monitor),
-                log_prefix=cam_log_prefix(side),
-            )
-            item["monitor_path"] = mon_str or str(work_path)
-            item["monitor"] = mon_meta
-            item["work_image_path"] = str(work_path)
-        sides_out[side] = item
 
     return {
         "ok": True,
@@ -117,7 +127,6 @@ def capture_only() -> Dict[str, Any]:
         "right": sides_out["right"],
         "left_image": sides_out["left"].get("image_path") or "",
         "right_image": sides_out["right"].get("image_path") or "",
-        # 兼容旧前端：无单张 image_path 时用左图
         "image_path": sides_out["left"].get("image_path")
         or sides_out["right"].get("image_path")
         or "",
@@ -160,6 +169,12 @@ def _maybe_export_excel(
         return None
 
 
+def _normalize_camera_side(side: Optional[str]) -> str:
+    """联调单侧上传：left|right；其它值默认 left（兼容旧「单图」）。"""
+    key = str(side or "").strip().lower()
+    return key if key in ("left", "right") else "left"
+
+
 def ocr_only(
     image_path: str,
     base_date: Optional[datetime] = None,
@@ -167,29 +182,39 @@ def ocr_only(
     trigger: str = "debug",
     persist: bool = True,
     upload_name: Optional[str] = None,
+    side: Optional[str] = None,
 ) -> Dict[str, Any]:
     from .run_store import persist_pipeline_result
+    from .pipeline_dual import get_camera_defs
+    from .camera_common import cam_log_prefix
 
     t_all = time.perf_counter()
     started_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     cfg = get_config()
     ocr_cfg = cfg.get("ocr", {})
+    cam_side = _normalize_camera_side(side)
+    cams = get_camera_defs(cfg)
+    cam = cams.get(cam_side) or {}
+    tag_prefix = str(cam.get("tag") or "").strip() or _tag_prefix(cfg)
+    search_crop = get_camera_table_search(cam_side, cfg)
     run_dir = new_ocr_run_dir("single", cfg)
     source_copy = _copy_source(image_path, run_dir)
-
-    # 由 capture.auto_monitor 控制是否先裁显示器有效区域
-    from .config import get_auto_monitor
-
-    auto_monitor = get_auto_monitor(cfg)
-    from .camera_common import cam_log_prefix
-
-    work_path, monitor_meta, monitor_path = prepare_monitor_work_image(
-        image_path,
-        run_dir,
-        enabled=bool(auto_monitor),
-        log_prefix=cam_log_prefix("single"),
+    work_image = source_copy or image_path
+    monitor_meta = {"ok": True, "mode": "skipped", "enabled": False}
+    monitor_path = ""
+    pfx = cam_log_prefix(cam_side)
+    search_desc = (
+        ",".join(f"{v:.3f}" for v in search_crop)
+        if search_crop is not None
+        else "整图"
     )
-    work_image = str(work_path)
+    logger.info(
+        "%s单侧上传识别 side=%s search=%s tag=%s（auto 失败即止）",
+        pfx,
+        cam_side,
+        search_desc,
+        tag_prefix,
+    )
 
     t_ocr = time.perf_counter()
     result = extract_points_from_image(
@@ -197,42 +222,27 @@ def ocr_only(
         workdir=resolve_ocr_workdir(cfg),
         scale=get_ocr_scale(cfg),
         min_confidence=float(ocr_cfg.get("min_confidence", 0.3)),
-        crop=None,
-        tag_prefix=_tag_prefix(cfg),
-        base_date=base_date,
+        tag_prefix=tag_prefix,
         debug_dir=run_dir,
         layout="double",
         fix_decimal=get_ocr_fix_decimal_cfg(cfg),
-        auto_enable=get_ocr_auto_enable(cfg),
         max_ocr_width=get_ocr_max_width(cfg),
-        date_cfg=get_ocr_date_cfg(cfg, layout="double"),
-        table_crop=get_ocr_table_crop(cfg, layout="double"),
         onnx_threads=get_ocr_onnx_threads(cfg),
-        log_prefix=cam_log_prefix("left"),
+        log_prefix=pfx,
+        search_crop=search_crop,
+        camera_side=cam_side,
     )
     ocr_ms = _elapsed_ms(t_ocr)
     payload = {**ocr_result_to_dict(result)}
     payload["monitor"] = monitor_meta
     if monitor_path:
         payload["monitor_image"] = monitor_path
-    if result.ok is False and (result.reason or "").startswith("date"):
-        quality = {
-            "ok": False,
-            "point_count": 0,
-            "min_points": get_ocr_min_points(cfg),
-            "reason": result.reason or "date_ocr_failed",
-            "message": result.message
-            or "未识别到左上角日期筛选框，已跳过表格 OCR",
-        }
-        payload["ok"] = False
-        payload["reason"] = quality["reason"]
-        payload["message"] = quality["message"]
-    else:
-        quality = evaluate_ocr_point_count(len(result.points))
-        payload["ok"] = bool(quality.get("ok"))
-        if not payload["ok"]:
-            payload["reason"] = quality.get("reason")
-            payload["message"] = quality.get("message")
+    quality = evaluate_ocr_point_count(len(result.points))
+    payload["ok"] = bool(quality.get("ok"))
+    if not payload["ok"]:
+        fail = resolve_ocr_fail_fields(quality, payload)
+        payload["reason"] = fail["reason"]
+        payload["message"] = fail["message"]
     payload["quality"] = quality
     if source_copy:
         payload["source_copy"] = source_copy
@@ -275,6 +285,8 @@ def ocr_only(
     if upload_name:
         out["upload_name"] = str(upload_name).strip()
         out["uploaded"] = True
+    out["camera_side"] = cam_side
+    out["table_search"] = search_desc if search_crop is not None else ""
     # 保持原 API 扁平字段
     out.update({k: v for k, v in payload.items() if k not in out})
     if persist:
@@ -289,7 +301,7 @@ def write_points_to_pi(
     tag: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
-    写入 PI：一行数据对应一个测点 前缀_1 … _N。
+    写入 PI：一行数据对应一个测点 前缀.01 … .0N。
     按 timestamp 时间线升序依次写入（旧点先写，新点后写）。
     优先用点内 tag；否则用 tag 参数或 capture.single.tag 作前缀按 row_index 拼接。
     |value| 超过 pi.value_max 的点跳过不写（仍记入 items，不影响 OCR/前端展示）。
@@ -394,10 +406,10 @@ def curve(
     client.connect()
     prefix = get_capture_tag(cfg)
     raw = (tag or "").strip()
-    # 传入前缀时默认读 _1；也可显式传 GX.DEMO.OCR_2 / _3
+    # 传入前缀时默认读 .01；已带 .01/.02 或旧式 _1 的完整测点名则原样查询
     if not raw:
         point = row_tag_name(prefix, 0)
-    elif raw.rsplit("_", 1)[-1].isdigit():
+    elif raw.rsplit(".", 1)[-1].isdigit() or raw.rsplit("_", 1)[-1].isdigit():
         point = raw
     else:
         point = row_tag_name(raw, 0)

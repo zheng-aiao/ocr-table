@@ -103,7 +103,7 @@ class OcrPoint:
     time_label: str  # 如 18:15
     value: float
     timestamp: datetime
-    tag: str = ""  # 如 GX.DEMO.OCR_1
+    tag: str = ""  # 如 GXPC.OCR.L.01
     row_index: int = 0  # 数据行 0-based
 
 
@@ -125,15 +125,78 @@ class OcrResult:
     # 胜出后同伴空格回填：格内为来源候选名（与 rows 同形，未补录为空串）
     gap_fill_map: List[List[str]] = field(default_factory=list)
     gap_filled: int = 0
-    # 业务日：画面左上角日期 OCR（履历展示用）；写库时间戳按 pi_date_back_days 提前
+    # 粘连业务处理：格内为原因（粘连拆分 / 粘连重识），与 rows 同形
+    sticky_map: List[List[str]] = field(default_factory=list)
+    sticky_filled: int = 0
+    # 业务日：本机系统日（不识别画面日期）；写库时间戳按 pi_date_back_days 提前
     base_date: str = ""
-    date_source: str = ""  # ocr | system | failed
+    date_source: str = ""  # system
     date_ocr: Dict[str, Any] = field(default_factory=dict)
     # 分阶段耗时（毫秒）：date_ms / table_ms / 各候选 ocr_ms
     timing: Dict[str, Any] = field(default_factory=dict)
+    # 表格区域 auto 失败并回退整图（联调/详情页提示）
+    table_crop_fallback: bool = False
+    table_crop_fallback_reason: str = ""
+    table_crop_fallback_message: str = ""
     ok: bool = True
     reason: str = ""
     message: str = ""
+
+
+def _table_extract_looks_valid(
+    headers: Sequence[Any],
+    rows: Sequence[Sequence[Any]],
+    *,
+    min_time_headers: int = 4,
+    min_numeric_cells: int = 6,
+) -> bool:
+    """
+    粗判 OCR 结果是否像现货时刻表（而非页脚/空表误裁）。
+    表头需有足够 HH:mm；数据区需有足够数值格。
+
+    另挡电价行残片：如粘连拆成 1/24/79（真实多为 289.xxx），
+    仅靠「填格数」会误判有效；本轮 auto 判定失败即止，不再 fixed/原图。
+    """
+    time_n = 0
+    for h in headers or []:
+        t = str(h or "").strip().replace("：", ":")
+        if _TIME_RE.match(t):
+            time_n += 1
+    if time_n < min_time_headers:
+        return False
+    num_re = re.compile(r"-?\d+(?:\.\d+)?")
+    filled = 0
+    for row in rows or []:
+        for cell in row:
+            s = str(cell or "").strip().replace(",", "")
+            if not s or s in ("-", "—", "–"):
+                continue
+            if num_re.fullmatch(s):
+                filled += 1
+    if filled < min_numeric_cells:
+        return False
+    # 三行表：末行是电价。现货 UI 电价几乎总带小数点；
+    # 有非零却无一格带点（1/24/79、7/84 等残片）→ 裁剪/粘连失败，触发回退
+    data_rows = [r for r in (rows or []) if r is not None]
+    if len(data_rows) >= 3:
+        dotted = 0
+        nonzero = 0
+        for cell in data_rows[-1]:
+            s = str(cell or "").strip().replace(",", "")
+            if not s or s in ("-", "—", "–") or not num_re.fullmatch(s):
+                continue
+            try:
+                v = abs(float(s))
+            except ValueError:
+                continue
+            if v < 1e-12:
+                continue
+            nonzero += 1
+            if "." in s:
+                dotted += 1
+        if nonzero >= 1 and dotted == 0:
+            return False
+    return True
 
 
 def _ensure_ocr_path(workdir: Path) -> None:
@@ -152,44 +215,39 @@ def _crop_label(crop: Optional[Tuple[float, float, float, float]]) -> str:
 
 
 def _cand_display_name(label: str) -> str:
-    """规范展示名：cand_table_fixed / cand_table_auto …"""
+    """规范展示名：cand_table_auto …"""
     lab = (label or "").strip() or "unknown"
     return lab if lab.startswith("cand_") else f"cand_{lab}"
 
 
 def _cand_short_name(label: str) -> str:
-    """日志短名：fixed / auto。"""
+    """日志短名：auto 等。"""
     lab = (label or "").strip().lower()
-    if "fixed" in lab:
-        return "fixed"
     if "auto" in lab:
         return "auto"
-    if "full" in lab:
-        return "full"
     name = _cand_display_name(label)
     return name.replace("cand_table_", "").replace("cand_", "") or "unknown"
-
-
-# 双摄单侧图默认固定表区（可被 config table_crop 覆盖）
-_DEFAULT_TABLE_CROP = (0.02, 0.52, 0.985, 0.90)
 
 
 def _default_crop_candidates(
     table_crop: Optional[Tuple[float, float, float, float]] = None,
 ) -> List[Tuple[str, Optional[Tuple[float, float, float, float]]]]:
     """
-    双摄表格 OCR 候选：先 fixed，auto 是否再跑由 auto_enable 决定。
-
-    fixed 用该侧 table_crop（未配则用默认框）。
-    auto_enable 开启且 fixed 表头不够好时，再跑蓝底自动定位。
-
-    裁完后都进同一套纠偏再 OCR（斜拍时 fixed 同样必须纠偏）。
+    本分支只跑 table_auto：在有效区域图上自动定位表格再截图 OCR。
+    table_crop / fixed 不再作为候选（自动定位失败时引擎内部仍可回退默认表带）。
     """
-    fixed = table_crop or _DEFAULT_TABLE_CROP
-    return [
-        ("table_fixed", fixed),
-        ("table_auto", None),
-    ]
+    del table_crop
+    return [("table_auto", None)]
+
+
+def _apply_ratio_crop(
+    img: Any,
+    crop_ratio: Tuple[float, float, float, float],
+) -> Any:
+    """按 (x0,y0,x1,y1) 比例裁剪 BGR。"""
+    h, w = img.shape[:2]
+    x0, y0, x1, y1 = crop_ratio
+    return img[int(h * y0) : int(h * y1), int(w * x0) : int(w * x1)].copy()
 
 
 def _materialize_crop_bgr(
@@ -198,16 +256,18 @@ def _materialize_crop_bgr(
     crop_ratio: Optional[Tuple[float, float, float, float]],
     *,
     deskew: bool = False,
+    search_crop: Optional[Tuple[float, float, float, float]] = None,
 ) -> Any:
     """
     按比例裁剪得到 BGR（未 scale）。
+    search_crop：先缩到配置搜索窗，再 table_auto / 固定框。
     deskew 仅表格预览用；日期定位/识别禁止纠偏（否则易把搜索带扭到曲线区）。
     """
     img = extractor.read_image_file(str(image_path))
+    if search_crop is not None:
+        img = _apply_ratio_crop(img, search_crop)
     if crop_ratio is not None:
-        h, w = img.shape[:2]
-        x0, y0, x1, y1 = crop_ratio
-        img = img[int(h * y0) : int(h * y1), int(w * x0) : int(w * x1)].copy()
+        img = _apply_ratio_crop(img, crop_ratio)
     else:
         # 与 extract(crop_ratio=None) 同一路径，保证 last_auto_crop_ratio = 实际裁剪框
         img = extractor._resolve_table_auto_crop(img)
@@ -217,6 +277,22 @@ def _materialize_crop_bgr(
         return extractor._deskew_table_image(img)
     except Exception:
         return img
+
+
+def _materialize_search_crop(
+    extractor: Any,
+    image_path: str,
+    search_crop: Tuple[float, float, float, float],
+    out_path: Path,
+) -> Optional[str]:
+    """把配置搜索窗裁出来落盘，供后续 table_auto 使用。"""
+    try:
+        img = extractor.read_image_file(str(image_path))
+        cropped = _apply_ratio_crop(img, search_crop)
+        return _save_bgr(out_path, cropped)
+    except Exception:
+        logger.exception("保存表格搜索窗失败: %s", out_path)
+        return None
 
 
 def _save_bgr(path: Path, bgr: Any) -> Optional[str]:
@@ -239,6 +315,9 @@ def _parse_float(text: str) -> Optional[float]:
     if not s or s == "-":
         return None
     body0 = s[1:] if s.startswith("-") and len(s) > 1 else s
+    # 摩尔纹竖线常把电价误读成 11/111；宁缺毋滥，不入库
+    if body0 in ("11", "111"):
+        return None
     digits0 = re.sub(r"\D", "", body0)
     if len(digits0) >= 10:
         return None
@@ -285,7 +364,7 @@ def _label_to_datetime(label: str, base_date: Optional[datetime] = None) -> date
 
 def _pi_write_base_date(ocr_date: datetime, back_days: Optional[int] = None) -> datetime:
     """
-    写 PI 用业务日 = OCR 识别日向前退 back_days 天（pi.pi_date_back_days）。
+    写 PI 用业务日 = 电脑系统日向前退 back_days 天（pi.pi_date_back_days）。
     1=提前一天；0=当天不提前。再与表头时刻拼接。
     """
     if back_days is None:
@@ -1661,61 +1740,24 @@ def resolve_business_date(
     log_prefix: str = "",
 ) -> Tuple[Optional[datetime], str, Dict[str, Any]]:
     """
-    业务日优先画面左上角日期 OCR。
-    ocr.date_ocr_enabled=false 时不跑识别，直接返回本机系统日（source=system）。
-    fallback_date 保留参数兼容，忽略。
-    返回 (date_or_None, source, date_ocr_payload)；source 为 ocr / failed / system。
+    本分支不识别画面日期，直接用本机系统日（年月日）。
+    写库日仍由调用方按 pi.pi_date_back_days 提前。
+    返回 (date, "system", payload)。
     """
-    del fallback_date
-    from .config import get_ocr_date_cfg
-
+    del image_path, workdir, fallback_date, date_cfg, min_confidence, debug_dir
     pfx = str(log_prefix or "")
-    cfg = date_cfg if date_cfg is not None else get_ocr_date_cfg()
-    if not cfg.get("enabled", True):
-        today = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
-        date_str = today.strftime("%Y-%m-%d")
-        logger.info("%s日期 OCR 已关闭(date_ocr_enabled=false)，用系统日 %s", pfx, date_str)
-        return today, "system", {
-            "ok": True,
-            "reason": "date_ocr_disabled",
-            "message": f"日期 OCR 已关闭，使用系统日 {date_str}",
-            "date": today,
-            "date_str": date_str,
-            "fallback": "system",
-            "skipped": True,
-        }
-
-    primary = cfg.get("crop")
-    if isinstance(primary, list):
-        primary = tuple(float(x) for x in primary)
-    if primary is None:
-        primary = (0.02, 0.02, 0.55, 0.34)
-
-    meta = extract_ui_date_from_image(
-        image_path,
-        workdir,
-        crop=primary,  # type: ignore[arg-type]
-        crops=None,
-        scale=float(cfg.get("scale", 1.0)),
-        min_confidence=min_confidence,
-        debug_dir=debug_dir,
-        layout="double",
-        auto_locate=True,
-        log_prefix=pfx,
-    )
-    if meta.get("ok") and meta.get("date") is not None:
-        return meta["date"], "ocr", meta
-
-    reason = str(meta.get("reason") or "date_not_found")
-    texts = list(meta.get("raw_texts") or [])[:8]
-    msg = "未识别到左上角日期筛选框中的业务日期，已跳过表格 OCR"
-    if texts:
-        msg += f"；OCR 原文：{' / '.join(str(t) for t in texts)}"
-    meta = dict(meta)
-    meta["ok"] = False
-    meta["reason"] = reason
-    meta["message"] = msg
-    return None, "failed", meta
+    today = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+    date_str = today.strftime("%Y-%m-%d")
+    logger.info("%s不识别画面日期，使用电脑系统日 %s", pfx, date_str)
+    return today, "system", {
+        "ok": True,
+        "reason": "system_date",
+        "message": f"不识别画面日期，使用电脑系统日 {date_str}",
+        "date": today,
+        "date_str": date_str,
+        "fallback": "system",
+        "skipped": True,
+    }
 
 
 def _empty_date_fail_result(
@@ -1783,9 +1825,9 @@ def _empty_date_fail_result(
 
 
 def row_tag_name(tag_prefix: str, row_index: int) -> str:
-    """GX.DEMO.OCR + _1/_2/_3（row_index 0-based）。"""
-    prefix = (tag_prefix or "GX.DEMO.OCR").strip().rstrip("_")
-    return f"{prefix}_{row_index + 1}"
+    """测点前缀 + 两位行号：GXPC.OCR.L → GXPC.OCR.L.01/.02/.03（row_index 0-based）。"""
+    prefix = (tag_prefix or "GXPC.OCR").strip().rstrip("._")
+    return f"{prefix}.{row_index + 1:02d}"
 
 
 def _points_from_full_table(
@@ -1874,7 +1916,8 @@ def _sanitize_headers_for_write(
     rows: List[List[str]],
     *,
     min_run: int = 2,
-) -> Tuple[List[str], List[List[str]]]:
+    sticky_map: Optional[List[List[str]]] = None,
+):
     """落库前表头清洗（与候选打分分离）。
 
     1. 丢掉非法列（解不出 / 不在 00:15~24:00 网格，如 00:00）
@@ -1883,16 +1926,41 @@ def _sanitize_headers_for_write(
     3. 同分钟去重（保留先出现的列）
     4. 时刻倒退 / 串屏：后段起点落在前段终点及以前 → 冲突，保留更长段；
        等长则保留左侧段
+
+    传入 sticky_map 时返回 (headers, rows, sticky_map)，否则 (headers, rows)。
     """
+    want_sticky = sticky_map is not None
+
+    def _finish(
+        h: List[str], r: List[List[str]], keep: Optional[Sequence[int]] = None
+    ):
+        if not want_sticky:
+            return h, r
+        src = sticky_map or []
+        if keep is None:
+            sm = [list(row) for row in src]
+        else:
+            sm = [[row[i] if i < len(row) else "" for i in keep] for row in src]
+            if not sm and r:
+                sm = [[""] * len(h) for _ in r]
+        # 对齐行数
+        while len(sm) < len(r):
+            sm.append([""] * len(h))
+        sm = sm[: len(r)]
+        sm = [
+            (list(row) + [""] * max(0, len(h) - len(row)))[: len(h)] for row in sm
+        ]
+        return h, r, sm
+
     if not headers:
-        return headers, rows
+        return _finish(headers, rows, None)
 
     n = len(headers)
     mins: List[Optional[int]] = [_header_minutes_in_grid(h) for h in headers]
     valid_idx = [i for i in range(n) if mins[i] is not None]
     if not valid_idx:
         empty_rows = [[] for _ in rows]
-        return [], empty_rows
+        return _finish([], empty_rows, [])
 
     runs: List[List[int]] = []
     cur: List[int] = [valid_idx[0]]
@@ -1939,13 +2007,13 @@ def _sanitize_headers_for_write(
             keep.append(i)
 
     if not keep:
-        return [], [[] for _ in rows]
+        return _finish([], [[] for _ in rows], [])
     if keep == list(range(n)):
-        return list(headers), [list(r) for r in rows]
+        return _finish(list(headers), [list(r) for r in rows], keep)
 
     new_headers = [headers[i] for i in keep]
     new_rows = [[row[i] if i < len(row) else "" for i in keep] for row in rows]
-    return new_headers, new_rows
+    return _finish(new_headers, new_rows, keep)
 
 
 def _strip_illegal_header_columns(
@@ -2226,7 +2294,7 @@ def extract_points_from_image(
     crop: Optional[Tuple[float, float, float, float]] = None,
     tag_prefix: str = "GX.DEMO.OCR",
     base_date: Optional[datetime] = None,
-    data_row_index: int = -1,  # 保留参数兼容旧调用，整表模式下忽略
+    data_row_index: int = -1,
     debug_dir: Optional[Path] = None,
     layout: str = "single",
     fix_decimal: Optional[Dict[str, Any]] = None,
@@ -2237,32 +2305,25 @@ def extract_points_from_image(
     table_crop: Optional[Tuple[float, float, float, float]] = None,
     onnx_threads: Optional[int] = None,
     log_prefix: str = "",
+    search_crop: Optional[Tuple[float, float, float, float]] = None,
+    camera_side: str = "",
 ) -> OcrResult:
     """
-    按 ocr_engine 逻辑做整表识别（第 1 行时刻表头，其余均为数据行）。
-    裁剪候选顺序：先 table_fixed，再按需 table_auto。
-    两路均：裁剪 → 纠偏 → OCR；按表头质量 / 实心行 / 填格密度择优，同分优先更紧裁剪。
-    auto_enable=True：fixed 表头可用且列数≥4 则跳过 auto，否则再跑 auto。
-    auto_enable=False：只跑 fixed，fixed 不够好也不再跑 auto。
-    skip_full_when_ok 已废弃（不再跑整图 full），保留参数兼容旧调用。
+    表格区域只做一轮 auto：search_crop 内（或整图）table_auto。
 
-    业务日优先左上角日期 OCR（完整年月日）。
-    ocr.date_ocr_enabled=false：跳过日期识别，直接用本机系统日继续表格 OCR。
-    ocr.date_ocr_enabled=true 且识别失败：若 ocr.date_fallback_system=true，
-    用本机系统日继续表格 OCR；否则整次失败并跳过表格 OCR。
+    成功或失败本轮即止；不再试 fixed / 原图整幅重识（留给下一抓拍周期）。
+
+    业务日用电脑系统日；写库时间戳按 pi.pi_date_back_days 提前。
+    camera_side：left|right，蒙板 content 门槛按侧；空则用引擎默认。
+    crop / date_cfg / table_crop / auto_enable 仅保留调用兼容，不再参与识别。
     """
-    del data_row_index
-    del skip_full_when_ok
+    del crop, base_date, data_row_index, layout, auto_enable, skip_full_when_ok
+    del date_cfg, table_crop
     pfx = str(log_prefix or "")
-    # crop 旧参：单屏曾把 capture.single.crop 当额外候选；现统一用 table_crop
-    if table_crop is None and crop is not None:
-        table_crop = crop
     _ensure_ocr_path(workdir)
     from extract_table import TableImageExtractor  # type: ignore
 
     t0 = time.perf_counter()
-    _lay = str(layout).strip().lower()
-    layout_mode = "dual" if _lay in ("dual", "double") else "single"
     if fix_decimal is None:
         try:
             from .config import get_ocr_fix_decimal_cfg
@@ -2287,498 +2348,237 @@ def extract_points_from_image(
         except Exception:
             extractor_kw["onnx_threads"] = 2
     extractor = TableImageExtractor(**extractor_kw)
-    artifacts: List[str] = []
-    best_crop_path = ""
+    side_key = str(camera_side or "").strip().lower()
+    if side_key in ("left", "right"):
+        extractor.camera_side = side_key
+        try:
+            from .config import get_camera_modal_dim
+
+            extractor.modal_dim_cfg = get_camera_modal_dim(side_key)
+        except Exception:
+            extractor.modal_dim_cfg = {}
+    else:
+        extractor.camera_side = ""
+        extractor.modal_dim_cfg = {}
+
+    today = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+    base_date_str = today.strftime("%Y-%m-%d")
+    date_source = "system"
+    date_ocr_out = {
+        "ok": True,
+        "reason": "system_date",
+        "message": f"不识别画面日期，使用电脑系统日 {base_date_str}",
+        "date_str": base_date_str,
+        "fallback": "system",
+        "skipped": True,
+    }
+    logger.info("%s业务日使用电脑系统日 %s", pfx, base_date_str)
+
     run_dir = Path(debug_dir) if debug_dir else None
     if run_dir is not None:
         run_dir.mkdir(parents=True, exist_ok=True)
-
-    # base_date 入参已废弃（兼容保留）；业务日只走画面 OCR / 系统日开关，不猜测/不对侧回填
-    del base_date
-    if date_cfg is None:
-        from .config import get_ocr_date_cfg
-
-        date_cfg = get_ocr_date_cfg(layout=layout_mode)
-    date_enabled = bool((date_cfg or {}).get("enabled", True))
-    if date_enabled:
-        logger.info("%s日期识别 开始", pfx)
-    else:
-        logger.info("%s日期识别 已关闭，跳过 OCR 直接用系统日", pfx)
-    resolved_date, date_source, date_ocr_meta = resolve_business_date(
-        image_path=image_path,
-        workdir=workdir,
-        fallback_date=None,
-        date_cfg=date_cfg,
-        min_confidence=min_confidence,
-        debug_dir=run_dir,
-        log_prefix=pfx,
-    )
-    date_ms = int((time.perf_counter() - t0) * 1000)
-    date_crop_path = str(date_ocr_meta.get("image_path") or "")
-    if date_crop_path:
-        artifacts.append(date_crop_path)
-    for p in date_ocr_meta.get("candidate_image_paths") or []:
-        if p and p not in artifacts:
-            artifacts.append(str(p))
-    best_date = str(date_ocr_meta.get("best_image_path") or "")
-    if best_date and best_date not in artifacts:
-        artifacts.append(best_date)
-    date_ocr_out = {k: v for k, v in date_ocr_meta.items() if k != "date"}
-    if date_ocr_meta.get("date") is not None and not date_ocr_out.get("date_str"):
-        date_ocr_out["date_str"] = date_ocr_meta["date"].strftime("%Y-%m-%d")
-
-    if date_source == "system" and resolved_date is not None:
-        # date_ocr_enabled=false，或后续扩展的其它系统日路径
-        base_date_str = resolved_date.strftime("%Y-%m-%d")
-        logger.info(
-            "%s日期识别 ms=%s 使用系统日 date=%s reason=%s",
-            pfx,
-            date_ms,
-            base_date_str,
-            date_ocr_out.get("reason"),
+    artifacts: List[str] = []
+    work_image = str(image_path)
+    search_ms = 0
+    if search_crop is not None:
+        t_search = time.perf_counter()
+        search_out = (run_dir or Path(image_path).resolve().parent) / "00_table_search.jpg"
+        saved_search = _materialize_search_crop(
+            extractor, image_path, search_crop, search_out
         )
-    elif date_source != "ocr" or resolved_date is None:
-        use_system = bool((date_cfg or {}).get("fallback_system", False))
-        if not use_system:
-            try:
-                from .config import get_ocr_date_fallback_system
-
-                use_system = get_ocr_date_fallback_system()
-            except Exception:
-                use_system = False
-        if use_system:
-            resolved_date = datetime.now().replace(
-                hour=0, minute=0, second=0, microsecond=0
-            )
-            date_source = "system"
-            base_date_str = resolved_date.strftime("%Y-%m-%d")
-            date_ocr_out = dict(date_ocr_out)
-            date_ocr_out["fallback"] = "system"
-            date_ocr_out["date_str"] = base_date_str
-            date_ocr_out["message"] = (
-                str(date_ocr_out.get("message") or "未识别到左上角业务日期")
-                + f"；已启用 date_fallback_system，用系统日 {base_date_str} 继续表格 OCR"
-            )
-            logger.warning(
-                "%s日期识别 ms=%s 失败 reason=%s — 回退系统日 %s 继续表格识别",
+        search_ms = int((time.perf_counter() - t_search) * 1000)
+        if saved_search:
+            work_image = saved_search
+            artifacts.append(saved_search)
+            logger.info(
+                "%s表格搜索窗 %s → %s",
                 pfx,
-                date_ms,
-                date_ocr_out.get("reason"),
-                base_date_str,
+                ",".join(f"{v:.3f}" for v in search_crop),
+                saved_search,
             )
         else:
-            logger.warning(
-                "%s日期识别 ms=%s 失败 source=%s reason=%s — 跳过表格识别",
-                pfx,
-                date_ms,
-                date_source,
-                date_ocr_out.get("reason"),
-            )
-            return _empty_date_fail_result(
-                image_path=image_path,
-                run_dir=run_dir,
-                artifacts=artifacts,
+            # 配置了先验窗却裁不出 → 本轮失败；禁止退回整图 OCR（耗时长且偏离窗内定位）
+            fail_ms = int((time.perf_counter() - t0) * 1000)
+            fail_msg = "表格搜索窗裁剪失败（本轮结束，不试整图）"
+            logger.warning("%s%s", pfx, fail_msg)
+            logger.info("%s区域识别 ms=%s search=%s（失败）", pfx, search_ms, search_ms)
+            return OcrResult(
+                image_path=str(image_path),
+                headers=[],
+                rows=[],
+                points=[],
+                row_tags=[],
+                data_row_index=-1,
+                artifacts_dir=str(run_dir) if run_dir else "",
+                best_crop_path="",
+                candidate_paths=artifacts,
+                candidates=[],
+                ocr_filled=0,
+                base_date=base_date_str,
                 date_source=date_source,
-                date_ocr_out=date_ocr_out,
-                timing={"date_ms": date_ms, "table_ms": 0, "ocr_ms": date_ms},
+                date_ocr=date_ocr_out,
+                timing={
+                    "date_ms": 0,
+                    "table_ms": 0,
+                    "region_ms": search_ms,
+                    "data_ms": 0,
+                    "ocr_ms": fail_ms,
+                },
+                table_crop_fallback=True,
+                table_crop_fallback_reason="search_crop_failed",
+                table_crop_fallback_message=fail_msg,
+                ok=False,
+                reason="table_ocr_failed",
+                message=fail_msg,
             )
-    else:
-        base_date_str = resolved_date.strftime("%Y-%m-%d")
-        logger.info("%s日期识别 ms=%s 成功 date=%s", pfx, date_ms, base_date_str)
 
-    crop_candidates: List[Tuple[str, Optional[Tuple[float, float, float, float]]]] = list(
-        _default_crop_candidates(table_crop=table_crop)
+    def _crop_fallback_fields() -> Tuple[bool, str, str]:
+        fb = bool(getattr(extractor, "last_crop_fallback", False))
+        reason = str(getattr(extractor, "last_crop_fallback_reason", "") or "")
+        msg = ""
+        if fb:
+            try:
+                msg = str(extractor.crop_fallback_message(reason) or "")
+            except Exception:
+                msg = ""
+            if not msg:
+                msg = "表格区域定位失败，已回退原图"
+        return fb, reason, msg
+
+    def _result_valid(res: Any) -> bool:
+        return _table_extract_looks_valid(
+            list(getattr(res, "headers", None) or []),
+            [list(r) for r in (getattr(res, "rows", None) or [])],
+        )
+
+    def _save_final_crop_preview(*, preview_src: str) -> str:
+        """落盘本轮 auto 送入 OCR 的表格预览。"""
+        if run_dir is None:
+            return ""
+        try:
+            bgr = _materialize_crop_bgr(
+                extractor,
+                preview_src,
+                None,
+                deskew=True,
+                search_crop=None,
+            )
+            saved = _save_bgr(run_dir / "cand_table_auto.jpg", bgr) or ""
+            if saved and saved not in artifacts:
+                artifacts.append(saved)
+            return saved
+        except Exception:
+            logger.exception("%s保存表格裁剪预览失败", pfx)
+            return ""
+
+    logger.info(
+        "%s表格识别 开始 auto%s（失败本轮即止，不试上扩/整图/fixed）",
+        pfx,
+        " (搜索窗内)" if search_crop is not None else "",
+    )
+    t_table = time.perf_counter()
+    result = extractor.extract(str(work_image), crop_ratio=None)
+    crop_fb, crop_fb_reason, crop_fb_msg = _crop_fallback_fields()
+    win_stage = "auto"
+    preview_src = work_image
+
+    table_ms = int((time.perf_counter() - t_table) * 1000)
+    steps = dict(getattr(extractor, "last_step_ms", None) or {})
+    region_ms = int(search_ms) + int(steps.get("region") or 0)
+    data_ms = int(steps.get("data") or 0)
+    timing_out = {
+        "date_ms": 0,
+        "table_ms": table_ms,
+        "region_ms": region_ms,
+        "data_ms": data_ms,
+        "crop_ms": int(steps.get("crop") or 0),
+        "deskew_ms": int(steps.get("deskew") or 0),
+        "ocr_pass_ms": int(steps.get("ocr") or 0),
+        "cell_fix_ms": int(steps.get("cell_fix") or 0),
+        "recover_ms": int(steps.get("recover") or 0),
+        "search_ms": int(search_ms),
+        "ocr_ms": int((time.perf_counter() - t0) * 1000),
+    }
+    logger.info(
+        "%s区域识别 ms=%s search=%s crop=%s deskew=%s",
+        pfx,
+        region_ms,
+        search_ms,
+        timing_out["crop_ms"],
+        timing_out["deskew_ms"],
+    )
+    logger.info(
+        "%s数据识别 ms=%s ocr=%s cell_fix=%s recover=%s",
+        pfx,
+        data_ms,
+        timing_out["ocr_pass_ms"],
+        timing_out["cell_fix_ms"],
+        timing_out["recover_ms"],
     )
 
-    seen = set()
-    unique: List[Tuple[str, Optional[Tuple[float, float, float, float]]]] = []
-    for label, c in crop_candidates:
-        key = c if c is not None else ("auto",)
-        if key in seen:
-            continue
-        seen.add(key)
-        unique.append((label, c))
+    cand_saved = _save_final_crop_preview(preview_src=preview_src)
+    timing_out["ocr_ms"] = int((time.perf_counter() - t0) * 1000)
 
-    def _score(
-        result: Any, cand: Optional[Tuple[float, float, float, float]]
-    ) -> Tuple[int, int, int, float]:
-        # (表头质量, 实心行, 密度, -面积)
-        if not result.headers or not result.rows:
-            return (-1, -1, -1, 0.0)
-        auto_ratio = (
-            getattr(extractor, "last_auto_crop_ratio", None) if cand is None else None
+    headers = list(result.headers or [])
+    rows = [list(r) for r in (result.rows or [])]
+    sticky_map = [
+        [str(c or "") for c in row]
+        for row in (getattr(result, "sticky_map", None) or [])
+    ]
+    sticky_filled = int(getattr(result, "sticky_filled", 0) or 0)
+    if sticky_filled <= 0 and sticky_map:
+        sticky_filled = sum(
+            1 for row in sticky_map for c in row if c and str(c).strip()
         )
-        hq = _header_quality(list(result.headers))
-        # 前导空列：错位表头虚高列数时扣分（每空列 -2，最多扣掉大半）
-        lead_pen = _leading_empty_penalty([list(r) for r in result.rows])
-        if hq >= 0 and lead_pen > 0:
-            hq = hq - min(hq, lead_pen * 2)
-        # 整型/小数混行：扣表头分，避免 auto 多列但行搅在一起压过干净 fixed
-        mix_pen = _row_type_mix_penalty([list(r) for r in result.rows])
-        if mix_pen > 0:
-            hq = hq - mix_pen
-        ncols = max(len(result.headers), 1)
-        filled = 0
-        solid = 0
-        # 窄表：按「填满约 2/3 列」计实心行（旧 max(6,…) 在 ≤5 列时永远为 0）
-        solid_need = max(3, (ncols * 2 + 2) // 3)
-        for row in result.rows:
-            nfill = 0
-            for cell in row:
-                if cell and str(cell).strip():
-                    nfill += 1
-                    filled += 1
-            if nfill >= solid_need:
-                solid += 1
-        density = int(100.0 * filled / max(len(result.rows) * ncols, 1))
-        # 认 OCR 原文小数：带 ≥2 位小数的格子略加密度分
-        dot_n = _literal_decimal_count(result.rows)
-        dens_adj = min(160, density + dot_n)
-        # 粘连怪物格扣密度：避免「脏但填满」压过稍空的干净候选
-        dirty = 0
-        for row in result.rows:
-            for cell in row:
-                if not cell:
-                    continue
-                s = str(cell).strip()
-                digits = re.sub(r"\D", "", s)
-                if len(digits) >= 10:
-                    dirty += 1
-                elif "." in s and len(re.sub(r"\D", "", s.split(".", 1)[0])) >= 7:
-                    dirty += 1
-        dens_adj = max(0, dens_adj - dirty * 25)
-        # 混行再扣密度，与表头混行罚分双保险
-        if mix_pen > 0:
-            dens_adj = max(0, dens_adj - mix_pen * 8)
-        return (
-            hq,
-            solid,
-            dens_adj,
-            -_crop_area_ratio(cand, auto_ratio=auto_ratio),
-        )
-
-    cand_records: List[Dict[str, Any]] = []
-    best = None
-    # 初值须低于「表头带罚分但仍可用」的候选（如误含 00:00 时 hq≈-42）。
-    # 若用 (-1,-1,-1,0)，所有 hq<0 的可用候选都选不中 → 0 点「未达下限」。
-    best_score: Tuple[int, int, int, float] = (-10**9, -1, -1, 0.0)
-    best_idx = -1
-    best_cand_path = ""
-    fixed_good = False
-    allow_auto = bool(auto_enable)
-
-    def _good_enough(
-        sc: Tuple[int, int, int, float],
-        rows: Optional[List[Any]] = None,
-        headers: Optional[List[Any]] = None,
-    ) -> bool:
-        """
-        fixed 是否够格，够格则不再跑 auto。
-        表头可用、列数够、且至少有填格；若上两行像摩尔纹假读，视为不够。
-        """
-        if sc[0] < 3:
-            return False
-        # 列过少：贴边误砍后的短表头不算够，开启 auto 时留给自动裁剪
-        # 抓拍半屏常只有 5~6 列有效，门槛用 4（勿用 7）
-        n_headers = len(list(headers or []))
-        if n_headers < 4:
-            return False
-        # 只认出表头、数据全空：不算够（常见于漏检 0/电价），交给 auto 再裁一刀
-        if int(sc[2]) <= 0:
-            return False
-        row_list = list(rows or [])
-        # 电力/计划行（末行电价除外）若像全 0 被读成垃圾，不算够
-        upper = row_list[:-1] if len(row_list) >= 2 else row_list
-        for row in upper:
-            try:
-                if extractor._row_looks_like_moire_zero_junk(row):
-                    return False
-            except Exception:
-                break
-        return True
-
-    t_table = time.perf_counter()
-    n_cands = len(unique)
-    logger.info("%s表格识别 开始 候选者%s位", pfx, n_cands)
-    for i, (label, c) in enumerate(unique):
-        short = _cand_short_name(label)
-        ord_i = i + 1  # 日志从 1 起
-        skip_reason = ""
-        is_auto = "auto" in (label or "").lower()
-        if is_auto and not allow_auto:
-            skip_reason = "auto_disabled"
-        elif is_auto and fixed_good:
-            skip_reason = "fixed_ok"
-        if skip_reason:
-            logger.info(
-                "%s表格识别 候选%s %s：跳过",
-                pfx,
-                ord_i,
-                short,
-            )
-            cand_records.append(
-                {
-                    "index": i,
-                    "label": label,
-                    "name": _cand_display_name(label),
-                    "crop": list(c) if c is not None else None,
-                    "status": "skipped",
-                    "reason": "",
-                    "score": None,
-                    "headers": [],
-                    "rows": [],
-                    "point_count": 0,
-                    "image_path": "",
-                    "skip_reason": skip_reason,
-                    "ocr_ms": 0,
-                }
-            )
-            continue
-
-        logger.debug(
-            "%s表格识别 候选%s %s crop=%s",
+    filled_n = sum(1 for row in rows for cell in row if cell and str(cell).strip())
+    looks_valid = _result_valid(result)
+    invalid = (not headers or not rows) or (not looks_valid)
+    if not looks_valid and (headers or rows):
+        logger.warning(
+            "%s自动定位结果不像有效时刻表，本轮失败（不做 fixed）",
             pfx,
-            ord_i,
-            short,
-            c,
         )
-        cand_saved = ""
-        cand_name = _cand_display_name(label)
-        if run_dir is not None:
-            try:
-                bgr = _materialize_crop_bgr(
-                    extractor, image_path, c, deskew=True
-                )
-                cand_path = run_dir / f"{cand_name}.jpg"
-                cand_saved = _save_bgr(cand_path, bgr) or ""
-                if cand_saved:
-                    artifacts.append(cand_saved)
-            except Exception:
-                logger.exception(
-                    "%s保存候选裁剪失败 候选%s %s", pfx, ord_i, short
-                )
-
-        t_cand = time.perf_counter()
-        result = extractor.extract(str(image_path), crop_ratio=c)
-        cand_ms = int((time.perf_counter() - t_cand) * 1000)
-        sc = _score(result, c)
-        # sc: (hq, solid, density, -area)
-        invalid = sc[0] < 0 and sc[1] <= 0
-        headers = list(result.headers or [])
-        rows = [list(r) for r in (result.rows or [])]
-        filled_n = sum(
-            1 for row in rows for cell in row if cell and str(cell).strip()
+        crop_fb_reason = crop_fb_reason or "ocr_invalid_auto_crop"
+        crop_fb_msg = (
+            crop_fb_msg
+            or "自动定位未识别到有效时刻表（本轮结束，请下一轮重试）"
         )
-
-        rec: Dict[str, Any] = {
-            "index": i,
-            "label": label,
-            "name": _cand_display_name(label),
-            "crop": list(c) if c is not None else None,
-            "status": "rejected",  # 稍后统一标 winner
-            "reason": "",
-            "score": _score_tuple_public(sc) if not invalid else list(sc[:3]) + [None],
+        crop_fb = True
+    if crop_fb and crop_fb_msg:
+        search_note = crop_fb_msg
+    elif search_crop is not None:
+        search_note = "搜索窗内自动定位表格"
+    else:
+        search_note = "自动定位表格"
+    cand_label = "table_auto"
+    cand_records = [
+        {
+            "index": 0,
+            "label": cand_label,
+            "name": f"cand_{cand_label}",
+            "crop": None,
+            "search_crop": list(search_crop) if search_crop is not None else None,
+            "status": "invalid" if invalid else "winner",
+            "reason": (
+                "未识别到有效表头/数据行" if invalid else search_note
+            ),
+            "table_crop_fallback": crop_fb,
+            "table_crop_fallback_reason": crop_fb_reason,
+            "table_crop_fallback_message": crop_fb_msg,
             "headers": headers,
             "rows": rows,
             "point_count": filled_n,
+            "sticky_map": sticky_map,
+            "sticky_filled": sticky_filled,
             "image_path": cand_saved,
-            "ocr_ms": cand_ms,
+            "ocr_ms": table_ms,
         }
-        if invalid:
-            logger.warning(
-                "%s表格识别 候选%s %s：无效 ms=%s",
-                pfx,
-                ord_i,
-                short,
-                cand_ms,
-            )
-            rec["invalid"] = True
-            cand_records.append(rec)
-            continue
+    ]
 
-        logger.info(
-            "%s表格识别 候选%s %s：ms=%s",
-            pfx,
-            ord_i,
-            short,
-            cand_ms,
-        )
-        cand_records.append(rec)
-        if sc > best_score:
-            best_score = sc
-            best = result
-            best_idx = i
-            best_cand_path = cand_saved
-        if (not is_auto) and _good_enough(
-            sc,
-            rows=list(getattr(result, "rows", None) or []),
-            headers=headers,
-        ):
-            fixed_good = True
-
-    table_ms = int((time.perf_counter() - t_table) * 1000)
-    timing_out: Dict[str, Any] = {
-        "date_ms": date_ms,
-        "table_ms": table_ms,
-        "ocr_ms": date_ms + table_ms,
-    }
-
-    winner_label = ""
-    winner_short = ""
-    if best_idx >= 0 and best_idx < len(cand_records):
-        win_lab = str(cand_records[best_idx].get("label") or "")
-        winner_label = _cand_display_name(win_lab)
-        winner_short = _cand_short_name(win_lab)
-
-    for rec in cand_records:
-        idx = int(rec["index"])
-        if rec.get("status") == "skipped":
-            rec["reason"] = _explain_loser(
-                (-1, -1, -1, 0.0),
-                best_score,
-                winner_label or "—",
-                skipped=True,
-                skip_reason=str(rec.get("skip_reason") or ""),
-            )
-            continue
-        if idx == best_idx:
-            rec["status"] = "winner"
-            rec.pop("invalid", None)
-            rec["reason"] = _explain_winner(best_score, winner_label)
-            continue
-        if rec.get("invalid"):
-            rec["status"] = "invalid"
-            rec["reason"] = _explain_loser(
-                (-1, -1, -1, 0.0),
-                best_score,
-                winner_label or "—",
-                invalid=True,
-            )
-            continue
-        rec["status"] = "loser"
-        pub = rec.get("score") or []
+    def _write_side_meta(best_path: str = "") -> None:
+        if run_dir is None:
+            return
         try:
-            mine_internal = (
-                int(pub[0]),
-                int(pub[1]),
-                int(pub[2]),
-                -float(pub[3]) if pub[3] is not None else 0.0,
-            )
-        except (TypeError, ValueError, IndexError):
-            mine_internal = (-1, -1, -1, 0.0)
-        rec["reason"] = _explain_loser(
-            mine_internal, best_score, winner_label or "—", invalid=False
-        )
-
-    # 胜出裁剪定结构；空格用其他候选同表头回填（例：auto 认出漏格，fixed 漏了）
-    # 只改最终 rows，不覆盖胜出者候选原始 rows（弹窗「本候选」仍看原识别）
-    gap_filled_n = 0
-    gap_fill_map: List[List[str]] = []
-    if best is not None and best_idx >= 0:
-        clean_h, clean_r = _sanitize_headers_for_write(
-            list(best.headers), [list(r) for r in best.rows]
-        )
-        if clean_h != list(best.headers) or clean_r != [list(r) for r in best.rows]:
-            best.headers = clean_h
-            best.rows = clean_r
-            logger.debug(
-                "%s表格识别 表头清洗 cols=%s",
-                pfx,
-                len(clean_h),
-            )
-        filled_rows, gap_filled_n, gap_fill_map = _gap_fill_from_peer_candidates(
-            list(best.headers),
-            [list(r) for r in best.rows],
-            cand_records,
-        )
-        if gap_filled_n > 0:
-            best.rows = filled_rows
-            best.ocr_filled = sum(
-                1
-                for row in filled_rows
-                for cell in row
-                if cell and str(cell).strip()
-            )
-            if best_idx < len(cand_records):
-                wrec = cand_records[best_idx]
-                # 保留胜出者原始识别表；补录只体现在最终结果 + gap_fill_map
-                base_reason = str(wrec.get("reason") or "")
-                wrec["reason"] = (
-                    f"{base_reason}；同伴候选回填空格 {gap_filled_n} 处"
-                    if base_reason
-                    else f"同伴候选回填空格 {gap_filled_n} 处"
-                )
-                wrec["gap_filled"] = gap_filled_n
-                wrec["gap_fill_map"] = [list(r) for r in gap_fill_map]
-            logger.debug(
-                "%s表格识别 同伴回填 gap_filled=%s winner=%s",
-                pfx,
-                gap_filled_n,
-                winner_label or best_idx,
-            )
-
-    if best is None:
-        logger.warning(
-            "%s表格识别 ms=%s 失败 — 未得到有效表头/数据行",
-            pfx,
-            table_ms,
-        )
-        if run_dir is not None and cand_records:
-            try:
-                (run_dir / "candidates.json").write_text(
-                    json.dumps(cand_records, ensure_ascii=False, indent=2),
-                    encoding="utf-8",
-                )
-                (run_dir / "date_ocr.json").write_text(
-                    json.dumps(
-                        {
-                            "base_date": base_date_str,
-                            "date_source": date_source,
-                            "date_ocr": date_ocr_out,
-                        },
-                        ensure_ascii=False,
-                        indent=2,
-                    ),
-                    encoding="utf-8",
-                )
-            except Exception:
-                logger.exception("写 candidates.json 失败（无胜出）")
-        return OcrResult(
-            image_path=str(image_path),
-            headers=[],
-            rows=[],
-            points=[],
-            row_tags=[],
-            data_row_index=-1,
-            artifacts_dir=str(run_dir) if run_dir else "",
-            best_crop_path="",
-            candidate_paths=artifacts,
-            candidates=cand_records,
-            ocr_filled=0,
-            base_date=base_date_str,
-            date_source=date_source,
-            date_ocr=date_ocr_out,
-            timing=timing_out,
-            ok=False,
-            reason="table_ocr_failed",
-            message="日期已识别，但表格 OCR 未得到有效表头/数据行",
-        )
-
-    if run_dir is not None and best_cand_path:
-        try:
-            best_out = run_dir / "best_table.jpg"
-            shutil.copy2(best_cand_path, best_out)
-            best_crop_path = str(best_out)
-            artifacts.append(best_crop_path)
-            (run_dir / "best_meta.txt").write_text(
-                f"layout={layout_mode}\n"
-                f"winner={winner_label or f'cand_{best_idx:02d}'}\n"
-                f"score={best_score}\n"
-                f"source={best_cand_path}\n"
-                f"base_date={base_date_str}\n"
-                f"date_source={date_source}\n",
-                encoding="utf-8",
-            )
             (run_dir / "candidates.json").write_text(
                 json.dumps(cand_records, ensure_ascii=False, indent=2),
                 encoding="utf-8",
@@ -2795,55 +2595,129 @@ def extract_points_from_image(
                 ),
                 encoding="utf-8",
             )
+            fb_line = (
+                f"table_crop_fallback=1\n"
+                f"table_crop_fallback_reason={crop_fb_reason}\n"
+                if crop_fb
+                else "table_crop_fallback=0\n"
+            )
+            (run_dir / "best_meta.txt").write_text(
+                f"layout=double\n"
+                f"winner=cand_{cand_label}\n"
+                f"stage={win_stage}\n"
+                f"source={best_path}\n"
+                f"base_date={base_date_str}\n"
+                f"date_source={date_source}\n"
+                f"{fb_line}",
+                encoding="utf-8",
+            )
         except Exception:
-            logger.exception("复制 best_table / 写 candidates.json 失败")
-            best_crop_path = best_cand_path
+            logger.exception("%s写表格识别产物失败", pfx)
 
-    # 履历 base_date 仍记 OCR 识别日；写库时间戳按 pi.pi_date_back_days 提前后再与表头时刻拼接
-    pi_base_date = _pi_write_base_date(resolved_date)
-    points, row_tags = _points_from_full_table(
-        list(best.headers),
-        [list(r) for r in best.rows],
-        tag_prefix,
-        pi_base_date,
-    )
-    ocr_filled = int(getattr(best, "ocr_filled", 0) or 0)
-    if ocr_filled <= 0:
-        ocr_filled = sum(
-            1
-            for row in (best.rows or [])
-            for cell in row
-            if cell and str(cell).strip()
+    if invalid:
+        logger.warning(
+            "%s表格识别 ms=%s 失败 — auto 未通过（本轮结束） region=%s data=%s",
+            pfx,
+            table_ms,
+            region_ms,
+            data_ms,
         )
+        _write_side_meta()
+        fail_msg = (
+            crop_fb_msg
+            if crop_fb and crop_fb_msg
+            else "表格 OCR 未得到有效时刻表（auto 失败，本轮结束）"
+        )
+        return OcrResult(
+            image_path=str(image_path),
+            headers=[],
+            rows=[],
+            points=[],
+            row_tags=[],
+            data_row_index=-1,
+            artifacts_dir=str(run_dir) if run_dir else "",
+            best_crop_path="",
+            candidate_paths=artifacts,
+            candidates=cand_records,
+            ocr_filled=0,
+            base_date=base_date_str,
+            date_source=date_source,
+            date_ocr=date_ocr_out,
+            timing=timing_out,
+            table_crop_fallback=crop_fb,
+            table_crop_fallback_reason=crop_fb_reason,
+            table_crop_fallback_message=crop_fb_msg,
+            ok=False,
+            reason="table_ocr_failed",
+            message=fail_msg,
+        )
+
+    headers, rows, sticky_map = _sanitize_headers_for_write(
+        headers, rows, sticky_map=sticky_map
+    )
+    sticky_filled = sum(
+        1 for row in sticky_map for c in row if c and str(c).strip()
+    )
+    # 候选记录同步清洗后的表（含粘连标记）
+    if cand_records:
+        cand_records[0]["headers"] = headers
+        cand_records[0]["rows"] = rows
+        cand_records[0]["sticky_map"] = sticky_map
+        cand_records[0]["sticky_filled"] = sticky_filled
+        cand_records[0]["point_count"] = sum(
+            1 for row in rows for cell in row if cell and str(cell).strip()
+        )
+    best_crop_path = ""
+    if run_dir is not None and cand_saved:
+        try:
+            best_out = run_dir / "best_table.jpg"
+            shutil.copy2(cand_saved, best_out)
+            best_crop_path = str(best_out)
+            artifacts.append(best_crop_path)
+        except Exception:
+            logger.exception("%s复制 best_table 失败", pfx)
+            best_crop_path = cand_saved
+    _write_side_meta(best_crop_path or cand_saved)
+
+    pi_base_date = _pi_write_base_date(today)
+    points, row_tags = _points_from_full_table(headers, rows, tag_prefix, pi_base_date)
+    ocr_filled = int(getattr(result, "ocr_filled", 0) or 0) or filled_n
     logger.info(
-        "%s表格识别 ms=%s 完成 winner=%s  filled=%s points=%s",
+        "%s表格识别 ms=%s 完成 auto filled=%s sticky=%s points=%s pi_date=%s fallback=%s region=%s data=%s",
         pfx,
         table_ms,
-        winner_short or winner_label or f"cand_{best_idx}",
         ocr_filled,
+        sticky_filled,
         len(points),
+        pi_base_date.strftime("%Y-%m-%d"),
+        crop_fb_reason or "0",
+        region_ms,
+        data_ms,
     )
     return OcrResult(
         image_path=str(image_path),
-        headers=list(best.headers),
-        rows=[list(r) for r in best.rows],
+        headers=headers,
+        rows=rows,
         points=points,
         row_tags=row_tags,
-        data_row_index=len(best.rows) - 1 if best.rows else -1,
+        data_row_index=len(rows) - 1 if rows else -1,
         artifacts_dir=str(run_dir) if run_dir else "",
         best_crop_path=best_crop_path,
         candidate_paths=artifacts,
         candidates=cand_records,
         ocr_filled=ocr_filled,
-        gap_fill_map=[list(r) for r in gap_fill_map],
-        gap_filled=int(gap_filled_n),
+        sticky_map=sticky_map,
+        sticky_filled=sticky_filled,
         base_date=base_date_str,
         date_source=date_source,
         date_ocr=date_ocr_out,
         timing=timing_out,
+        table_crop_fallback=crop_fb,
+        table_crop_fallback_reason=crop_fb_reason,
+        table_crop_fallback_message=crop_fb_msg,
         ok=True,
         reason="",
-        message="",
+        message=crop_fb_msg if crop_fb else "",
     )
 
 
@@ -2861,10 +2735,15 @@ def ocr_result_to_dict(r: OcrResult) -> Dict[str, Any]:
         "ocr_filled": int(r.ocr_filled or 0),
         "gap_fill_map": [list(row) for row in (r.gap_fill_map or [])],
         "gap_filled": int(r.gap_filled or 0),
+        "sticky_map": [list(row) for row in (r.sticky_map or [])],
+        "sticky_filled": int(r.sticky_filled or 0),
         "base_date": r.base_date or None,
         "date_source": r.date_source or None,
         "date_ocr": dict(r.date_ocr or {}),
         "timing": dict(r.timing or {}),
+        "table_crop_fallback": bool(r.table_crop_fallback),
+        "table_crop_fallback_reason": r.table_crop_fallback_reason or None,
+        "table_crop_fallback_message": r.table_crop_fallback_message or None,
         "ok": bool(r.ok),
         "reason": r.reason or None,
         "message": r.message or None,

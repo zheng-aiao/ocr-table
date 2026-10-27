@@ -29,7 +29,7 @@ for _stream in (sys.stdout, sys.stderr):
     except Exception:
         pass
 
-from fastapi import FastAPI, File, HTTPException, Query, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, Query, UploadFile
 from fastapi.responses import FileResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
@@ -204,7 +204,7 @@ def api_list_runs(
     ok: Optional[bool] = Query(None, description="兼容：true=三步成功"),
     result: Optional[str] = Query(
         None,
-        description="结果: ok|partial_ok|capture_fail|ocr_fail|pi_fail|pending_pi",
+        description="结果: any_ok|ok|partial_ok|capture_fail|ocr_fail|pi_fail|pending_pi",
     ),
     day: Optional[str] = Query(None, description="yyyy-MM-dd 或 yyyyMMdd"),
     pi: Optional[str] = Query(
@@ -279,6 +279,9 @@ def api_capture():
 class OcrRequest(BaseModel):
     image_path: str = Field(..., description="本地图片绝对/相对路径")
     base_date: Optional[str] = Field(None, description="业务日期 yyyy-MM-dd（单屏）")
+    side: Optional[str] = Field(
+        None, description="摄像头侧 left|right，决定 table_search / fixed / tag"
+    )
 
 
 @app.post("/api/ocr")
@@ -286,11 +289,15 @@ def api_ocr(body: OcrRequest):
     path = Path(body.image_path)
     if not path.is_file():
         raise HTTPException(400, f"图片不存在: {body.image_path}")
+    side = (body.side or "").strip().lower() or None
+    if side is not None and side not in ("left", "right"):
+        raise HTTPException(400, "side 须为 left 或 right")
     try:
         return ocr_only(
             str(path),
             base_date=_parse_base_date(body.base_date),
             trigger="debug",
+            side=side,
         )
     except Exception as e:
         logger.exception("ocr failed")
@@ -429,13 +436,21 @@ async def api_ocr_dual_upload(
 
 
 @app.post("/api/ocr/upload")
-async def api_ocr_upload(file: UploadFile = File(...)):
-    """上传本机图片并 OCR：仅用临时文件，不写入 captures。"""
+async def api_ocr_upload(
+    file: UploadFile = File(...),
+    side: Optional[str] = Form(
+        None, description="摄像头侧 left|right，决定 table_search / fixed / tag"
+    ),
+):
+    """上传本机图片并 OCR：按 side 使用 cameras.*.table_search；不写入 captures。"""
     import tempfile
 
     suffix = Path(file.filename or "upload.jpg").suffix.lower() or ".jpg"
     if suffix not in {".jpg", ".jpeg", ".png", ".bmp", ".webp", ".tif", ".tiff"}:
         raise HTTPException(400, f"不支持的图片格式: {suffix}")
+    side_key = (side or "").strip().lower() or None
+    if side_key is not None and side_key not in ("left", "right"):
+        raise HTTPException(400, "side 须为 left 或 right")
     tmp_path: Optional[Path] = None
     try:
         content = await file.read()
@@ -451,6 +466,7 @@ async def api_ocr_upload(file: UploadFile = File(...)):
             str(tmp_path),
             trigger="debug",
             upload_name=upload_name,
+            side=side_key,
         )
         result["upload_name"] = upload_name
         result["image_path"] = result.get("source_copy") or upload_name
@@ -591,10 +607,21 @@ class DualRunRequest(BaseModel):
 
 @app.get("/api/config/view")
 def api_get_view_config():
-    """双摄配置：cameras + capture.double 裁剪（date_crop=搜索带）。"""
+    """双摄配置：cameras.*.table_search（auto 先验）。"""
     cfg = get_config()
     double = get_dual_defs(cfg)
     cams = get_camera_defs(cfg)
+    side_view = {
+        side: {
+            "id": sc.get("id"),
+            "title": sc.get("title"),
+            "table_search": sc.get("table_search") or "",
+            "tag": sc.get("tag"),
+            "host": sc.get("host"),
+            "type": sc.get("type"),
+        }
+        for side, sc in double.items()
+    }
     return {
         "ok": True,
         "mode": "double",
@@ -604,34 +631,13 @@ def api_get_view_config():
                 "type": sc.get("type"),
                 "host": sc.get("host"),
                 "tag": sc.get("tag"),
+                "table_search": double.get(side, {}).get("table_search") or "",
             }
             for side, sc in cams.items()
         },
-        "double": {
-            side: {
-                "id": sc.get("id"),
-                "title": sc.get("title"),
-                "table_crop": sc.get("table_crop"),
-                "date_crop": sc.get("date_crop"),
-                "tag": sc.get("tag"),
-                "host": sc.get("host"),
-                "type": sc.get("type"),
-            }
-            for side, sc in double.items()
-        },
+        "double": side_view,
         # 兼容旧前端字段名
-        "dual": {
-            side: {
-                "id": sc.get("id"),
-                "title": sc.get("title"),
-                "table_crop": sc.get("table_crop"),
-                "date_crop": sc.get("date_crop"),
-                "tag": sc.get("tag"),
-                "host": sc.get("host"),
-                "type": sc.get("type"),
-            }
-            for side, sc in double.items()
-        },
+        "dual": side_view,
     }
 
 

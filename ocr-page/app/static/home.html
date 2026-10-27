@@ -356,17 +356,11 @@
   </header>
   <main>
     <div class="filters">
-      <label>模式
-        <select id="mode">
-          <option value="">全部</option>
-          <option value="single">单屏</option>
-          <option value="dual">双屏</option>
-        </select>
-      </label>
       <label>结果
         <select id="result">
           <option value="">全部</option>
-          <option value="ok">成功</option>
+          <option value="any_ok" selected>任一成功</option>
+          <option value="ok">两侧都成功</option>
           <option value="partial_ok">部分成功</option>
           <option value="capture_fail">抓拍失败</option>
           <option value="ocr_fail">OCR识别失败</option>
@@ -401,6 +395,14 @@
     let page = 1;
     let totalPages = 1;
 
+    function todayISO() {
+      const d = new Date();
+      const y = d.getFullYear();
+      const m = String(d.getMonth() + 1).padStart(2, '0');
+      const day = String(d.getDate()).padStart(2, '0');
+      return `${y}-${m}-${day}`;
+    }
+
     function modeBadge(item) {
       return item.mode === 'dual'
         ? ['mode-dual', '双屏']
@@ -409,7 +411,9 @@
 
     function statusBadge(item) {
       const st = item.result_status || '';
-      if (st === 'ok') return ['ok', '成功'];
+      if (st === 'ok') {
+        return item.mode === 'dual' ? ['ok', '两侧都成功'] : ['ok', '成功'];
+      }
       if (st === 'partial_ok') return ['partial', '部分成功'];
       if (st === 'capture_fail') return ['fail', '抓拍失败'];
       if (st === 'ocr_fail') return ['fail', 'OCR识别失败'];
@@ -473,7 +477,6 @@
 
     function currentFilters() {
       return {
-        mode: $('mode').value,
         result: $('result').value,
         day: $('day').value,
       };
@@ -494,14 +497,13 @@
     }
 
     async function load() {
-      const { mode, result, day } = currentFilters();
+      const { result, day } = currentFilters();
       const limit = pageSize();
       const offset = (page - 1) * limit;
       const qs = new URLSearchParams({
         limit: String(limit),
         offset: String(offset),
       });
-      if (mode) qs.set('mode', mode);
       if (result) qs.set('result', result);
       if (day) qs.set('day', day);
       $('meta').textContent = '加载中…';
@@ -615,9 +617,8 @@
     }
 
     async function rewritePi() {
-      const { mode, day } = currentFilters();
+      const { day } = currentFilters();
       const countQs = new URLSearchParams({ limit: '1', offset: '0', pi: 'pending' });
-      if (mode) countQs.set('mode', mode);
       if (day) countQs.set('day', day);
       let pending = 0;
       try {
@@ -633,10 +634,7 @@
         alert('当前筛选下没有可补录记录（OCR 成功且写 PI 为「未写入/写失败」）。');
         return;
       }
-      const scope = [
-        mode ? (mode === 'dual' ? '双屏' : '单屏') : null,
-        day || null,
-      ].filter(Boolean).join(' · ') || '全部';
+      const scope = day || '全部';
       if (!confirm(`将对「${scope}」下 ${pending} 条按时间线补写 PI（未写入+写失败），是否继续？`)) return;
 
       const btn = $('rewritePi');
@@ -646,7 +644,6 @@
       $('meta').textContent = `正在补录 ${pending} 条…`;
       try {
         const body = { limit: Math.min(500, pending) };
-        if (mode) body.mode = mode;
         if (day) body.day = day;
         const resp = await fetch('/api/runs/pi/rewrite', {
           method: 'POST',
@@ -669,7 +666,6 @@
 
     $('reload').addEventListener('click', load);
     $('rewritePi').addEventListener('click', rewritePi);
-    $('mode').addEventListener('change', reloadFromFirst);
     $('result').addEventListener('change', reloadFromFirst);
     $('day').addEventListener('change', reloadFromFirst);
     $('pageSize').addEventListener('change', reloadFromFirst);
@@ -683,6 +679,8 @@
       page += 1;
       load();
     });
+    // 默认查今日（清空日期可查全部）
+    if (!$('day').value) $('day').value = todayISO();
     load();
   </script>
 </body>

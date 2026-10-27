@@ -16,8 +16,8 @@
   ocr.bat start           后台启动服务（优先 python\，否则 .venv）
   ocr.bat stop            停止服务
   ocr.bat restart         停止后重新启动（改代码/配置后常用）
-  ocr.bat pack            打轻量更新包 → 上级目录 gx-capture-demo-update.zip（不含 python\）
-  ocr.bat pack -all       打全量离线包 → 上级目录 gx-capture-demo-field.zip（含 python\）
+  ocr.bat pack            打轻量更新包 → 上级目录 gx-ocr-update-yyyyMMdd-HHmm.zip（不含 python\）
+  ocr.bat pack -all       打全量离线包 → 上级目录 gx-ocr-all-yyyyMMdd-HHmm.zip（含 python\）
                           若缺少 python\，会自动尝试 install / offline 再打包
 
 访问地址（启动后）：
@@ -33,7 +33,7 @@
 二、目录结构
 ------------
 
-  gx-capture-demo\
+  gx-ocr\
   │
   ├─ ocr.bat                 唯一对外入口
   ├─ config.yaml             相机 / OCR / PI / 定时等配置（现场必改）
@@ -50,10 +50,10 @@
   ├─ scripts\                install / start / stop / pack / offline 等脚本
   │
   ├─ data\                   运行数据（自动生成，一般不必打包进更新包）
-  │   ├─ captures\           抓图
-  │   ├─ ocr_runs\           OCR 中间结果
-  │   ├─ runs\               执行履历 JSON
-  │   ├─ exports\            Excel 导出
+  │   ├─ captures\YYYYMMDD\  抓图（按日分区）
+  │   ├─ ocr_runs\YYYYMMDD\  OCR 中间结果（按日 / single|dual|double）
+  │   ├─ runs\YYYYMMDD\      执行履历 JSON（按日分区）
+  │   ├─ exports\YYYYMMDD\   Excel 导出（按日分区）
   │   ├─ ocr.log             服务日志
   │   └─ ocr.pid             后台进程号
   │
@@ -71,7 +71,7 @@
   3. 编辑 config.yaml         # 相机、PI、单双屏等
   4. ocr.bat start            # 本机联调；浏览器打开上述地址
   5. ocr.bat offline          # 生成便携 python\（可重复执行，会先清空再建）
-  6. ocr.bat pack -all        # 生成 ..\gx-capture-demo-field.zip
+  6. ocr.bat pack -all        # 生成 ..\gx-ocr-all-yyyyMMdd-HHmm.zip
 
 说明：
   - start 时若已有 python\，优先用 python\；否则用 .venv
@@ -84,8 +84,8 @@
 
 全量包已含 python\，现场无需联网、无需安装 Python。
 
-  1. 解压 gx-capture-demo-field.zip 到任意目录
-     （路径尽量避免奇怪特殊字符）
+  1. 解压 gx-ocr-all-yyyyMMdd-HHmm.zip 到任意目录
+     （解压后根目录为 gx-ocr\；路径尽量避免奇怪特殊字符）
   2. 用记事本编辑 config.yaml：
        - camera：IP / 账号 / 密码 / 通道
        - pi：服务器 / 账号 / 密码（dll 默认 app\pidll，一般不用改）
@@ -105,7 +105,7 @@
 五、现场：轻量更新（不含 python\）
 --------------------------------
 
-开发机执行 ocr.bat pack，得到 ..\gx-capture-demo-update.zip。
+开发机执行 ocr.bat pack，得到 ..\gx-ocr-update-yyyyMMdd-HHmm.zip。
 
   1. ocr.bat stop
   2. 解压覆盖：app\、scripts\、ocr.bat、config.yaml 等

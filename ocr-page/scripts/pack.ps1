@@ -5,9 +5,9 @@
 
 $ErrorActionPreference = "Stop"
 $root = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
-$tag = if ($Mode -eq "all") { "field" } else { "update" }
-$stage = Join-Path $env:TEMP ("gx-capture-demo-$tag-" + [guid]::NewGuid().ToString("N"))
-$dest = Join-Path $stage "gx-capture-demo"
+$tag = if ($Mode -eq "all") { "all" } else { "update" }
+$stage = Join-Path $env:TEMP ("gx-ocr-$tag-" + [guid]::NewGuid().ToString("N"))
+$dest = Join-Path $stage "gx-ocr"
 
 if ($Mode -eq "all") {
   $includeDirs = @(

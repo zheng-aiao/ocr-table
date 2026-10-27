@@ -49,7 +49,7 @@
       border: 0;
       border-radius: 0;
       margin: 0;
-      padding: 10px 18px;
+      padding: 10px 14px;
       background: transparent;
       color: var(--muted);
       font-weight: 650;
@@ -221,6 +221,18 @@
       color: var(--muted);
       margin-bottom: 4px;
     }
+    .capture-grid .src-col label .crop-fb {
+      color: var(--warn);
+      font-weight: 600;
+    }
+    .capture-grid .crop-fb-hint {
+      display: none;
+      font-size: 0.75rem;
+      color: var(--warn);
+      margin: 4px 0 0;
+      line-height: 1.35;
+    }
+    .capture-grid .crop-fb-hint.show { display: block; }
     .capture-grid img {
       width: 100%;
       max-height: 220px;
@@ -248,6 +260,9 @@
     .msg.ok { color: var(--ok); }
     .msg.err { color: var(--err); }
     .msg.warn { color: var(--warn); }
+    .ocr-table td.pi-ok { color: var(--ok); }
+    .ocr-table td.pi-fail { color: var(--err); background: rgba(212,91,99,0.10); }
+    .ocr-table td.pi-skip { color: var(--warn); }
     .ocr-table-wrap {
       max-height: 320px;
       overflow: auto;
@@ -294,6 +309,40 @@
     .ocr-table td.empty {
       background: rgba(212, 91, 99, 0.12);
       color: #8a969e;
+    }
+    .ocr-table td.sticky-handled {
+      background: rgba(56, 139, 253, 0.20);
+      color: #79b8ff;
+      cursor: help;
+      box-shadow: inset 0 0 0 1px rgba(56, 139, 253, 0.45);
+      position: relative;
+    }
+    .ocr-table td.sticky-handled::after {
+      content: '粘';
+      position: absolute;
+      top: 0;
+      right: 1px;
+      font-size: 0.58rem;
+      line-height: 1;
+      opacity: 0.9;
+      color: #58a6ff;
+      pointer-events: none;
+    }
+    .sticky-legend {
+      margin: 6px 0 0;
+      color: var(--muted);
+      font-size: 0.78rem;
+      line-height: 1.4;
+    }
+    .sticky-legend .swatch {
+      display: inline-block;
+      width: 0.7em;
+      height: 0.7em;
+      margin-right: 4px;
+      vertical-align: -1px;
+      border-radius: 2px;
+      background: rgba(56, 139, 253, 0.35);
+      box-shadow: inset 0 0 0 1px rgba(56, 139, 253, 0.5);
     }
     .toast {
       position: fixed;
@@ -386,7 +435,8 @@
       </p>
     </div>
     <div class="mode-switch" role="group" aria-label="联调模式">
-      <button type="button" id="btnModeImage" data-mode="image">单图</button>
+      <button type="button" id="btnModeLeft" data-mode="left">左摄</button>
+      <button type="button" id="btnModeRight" data-mode="right">右摄</button>
       <button type="button" id="btnModeDouble" data-mode="double">双摄</button>
     </div>
   </header>
@@ -431,13 +481,15 @@
             <label id="labelSrcR">右 · 原图</label>
             <img id="previewSrcR" alt="右摄像头原图" title="点击放大预览" />
           </div>
-          <div class="src-col">
-            <label id="labelMonL">左 · 有效区域</label>
-            <img id="previewMonL" alt="左有效区域" title="点击放大预览" />
+          <div class="src-col" id="monColL" style="display:none;">
+            <label id="labelMonL">左 · 表格区域</label>
+            <img id="previewMonL" alt="左表格区域" title="点击放大预览" />
+            <p class="crop-fb-hint" id="cropFbHintL"></p>
           </div>
-          <div class="src-col">
-            <label id="labelMonR">右 · 有效区域</label>
-            <img id="previewMonR" alt="右有效区域" title="点击放大预览" />
+          <div class="src-col" id="monColR" style="display:none;">
+            <label id="labelMonR">右 · 表格区域</label>
+            <img id="previewMonR" alt="右表格区域" title="点击放大预览" />
+            <p class="crop-fb-hint" id="cropFbHintR"></p>
           </div>
         </div>
         <div id="captureMsg" class="msg"></div>
@@ -490,11 +542,12 @@
           <button id="btnOcrWrite" disabled>OCR 结果写入 PI</button>
         </div>
         <div id="ocrWriteMsg" class="msg"></div>
+        <div id="ocrWriteDetail" class="ocr-table-wrap" style="display:none;max-height:280px;"></div>
 
         <div class="fields cols-3" style="margin-top:12px;">
           <div>
             <label for="piTagName">测点名称</label>
-            <input id="piTagName" placeholder="例如 GX.DEMO.OCR.L_1" value="" />
+            <input id="piTagName" placeholder="例如 GXPC.OCR.L.01" value="" />
           </div>
           <div>
             <label for="piTime">写入时间（空=现在）</label>
@@ -547,7 +600,7 @@
   <div class="modal-mask" id="tagModal">
     <div class="modal">
       <h3 id="tagModalTitle">配置测点前缀</h3>
-      <p class="hint" id="tagModalHint">一行数据对应一个测点：前缀_1…_N。写入 config.yaml 的 capture.single.tag。</p>
+      <p class="hint" id="tagModalHint">一行数据对应一个测点：前缀.01…前缀.0N。写入 config.yaml 的 capture.single.tag。</p>
       <div id="tagModalSingle">
         <label for="tagInput">测点前缀</label>
         <input id="tagInput" placeholder="例如 GX.DEMO.OCR" />
@@ -605,9 +658,32 @@
     };
     let ocrReady = false;
     let currentTag = "";
-    let viewMode = "double"; // image | double
+    let viewMode = "double"; // left | right | double
     let screenTags = { left: "", right: "" };
     let screenTitles = { left: "左机组", right: "右机组" };
+
+    function isSideUploadMode(mode) {
+      const m = mode == null ? viewMode : mode;
+      return m === "left" || m === "right";
+    }
+    function currentCameraSide() {
+      return viewMode === "right" ? "right" : "left";
+    }
+    function sideLabel(side) {
+      return side === "right" ? "右摄" : "左摄";
+    }
+    function normalizeViewMode(mode) {
+      const m = String(mode || "double").toLowerCase();
+      if (m === "right") return "right";
+      // 旧「单图 / image / single」按左摄处理（table_search 用 cameras.left）
+      if (m === "left" || m === "image" || m === "single") return "left";
+      return "double";
+    }
+    function sideSearchHint(side) {
+      const sc = (cachedDualCfg && cachedDualCfg[side]) || {};
+      const search = sc.table_search || "整图";
+      return `table_search=${search}（auto 失败即止）`;
+    }
 
     const todayStr = new Date().toISOString().slice(0, 10);
 
@@ -678,7 +754,7 @@
 
     const BTN_IDS = [
       "btnCapture", "btnImagePick", "btnOcr", "btnOcrPick", "btnOcrDetail", "btnOcrWrite", "btnPiWrite",
-      "btnCurve", "btnTagCfg", "btnTagSave", "btnModeImage", "btnModeDouble",
+      "btnCurve", "btnTagCfg", "btnTagSave", "btnModeLeft", "btnModeRight", "btnModeDouble",
     ];
 
     function pad(n) { return String(n).padStart(2, "0"); }
@@ -710,6 +786,49 @@
       const el = document.getElementById(id);
       el.textContent = text || "";
       el.className = "msg" + (kind ? (" " + kind) : "");
+    }
+
+    function clearOcrWriteDetail() {
+      const box = document.getElementById("ocrWriteDetail");
+      if (!box) return;
+      box.innerHTML = "";
+      box.style.display = "none";
+    }
+
+    function renderOcrWriteDetail(items) {
+      const box = document.getElementById("ocrWriteDetail");
+      if (!box) return;
+      const list = Array.isArray(items) ? items : [];
+      if (!list.length) {
+        clearOcrWriteDetail();
+        return;
+      }
+      const esc = (s) => String(s == null ? "" : s)
+        .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+      let rows = "";
+      for (const it of list) {
+        let stCls = "pi-fail";
+        let stText = "失败";
+        if (it.skipped) { stCls = "pi-skip"; stText = "跳过"; }
+        else if (it.ok) { stCls = "pi-ok"; stText = "成功"; }
+        const code = it.skipped ? "-" : (it.pi_code != null ? it.pi_code : "-");
+        const reason = it.message || it.reason || "";
+        rows += `<tr>
+          <td>${esc(it.timestamp || "")}</td>
+          <td>${esc(it.tag || "")}</td>
+          <td>${it.value != null ? esc(it.value) : ""}</td>
+          <td class="${stCls}">${stText}</td>
+          <td>${esc(code)}</td>
+          <td style="text-align:left;white-space:normal;max-width:280px;color:var(--muted);">${esc(reason)}</td>
+        </tr>`;
+      }
+      box.innerHTML = `<table class="ocr-table">
+        <thead><tr>
+          <th>时刻</th><th>测点</th><th>值</th><th>结果</th><th>code</th><th>原因</th>
+        </tr></thead>
+        <tbody>${rows}</tbody>
+      </table>`;
+      box.style.display = "block";
     }
 
     function toast(title, body, ok) {
@@ -777,9 +896,10 @@
     }
 
     /** 与详情页一致：行=测点指标，列=时刻表头 */
-    function renderOcrListInto(headId, bodyId, wrapId, points, headers, rowTags, rows) {
+    function renderOcrListInto(headId, bodyId, wrapId, points, headers, rowTags, rows, stickyMap, legendId) {
       let timeHeaders = Array.isArray(headers) ? headers.slice() : [];
       let matrix = Array.isArray(rows) ? rows.map((r) => (Array.isArray(r) ? r.slice() : [])) : [];
+      const sticky = Array.isArray(stickyMap) ? stickyMap : [];
 
       // 无整表矩阵时，从 points 还原为「指标 × 时刻」
       if ((!timeHeaders.length || !matrix.length) && Array.isArray(points) && points.length) {
@@ -790,7 +910,7 @@
           for (const p of points) {
             let idx = typeof p.row_index === "number" ? p.row_index : -1;
             if (idx < 0) {
-              const m = String(p.tag || "").match(/_(\d+)$/);
+              const m = String(p.tag || "").match(/[._](\d+)$/);
               idx = m ? Number(m[1]) - 1 : 0;
             }
             nCols = Math.max(nCols, idx + 1);
@@ -806,7 +926,7 @@
           const col = byTime.get(key);
           let idx = typeof p.row_index === "number" ? p.row_index : -1;
           if (idx < 0) {
-            const m = String(p.tag || "").match(/_(\d+)$/);
+            const m = String(p.tag || "").match(/[._](\d+)$/);
             idx = m ? Number(m[1]) - 1 : 0;
           }
           if (idx >= 0) {
@@ -838,12 +958,19 @@
           timeHeaders.map((h) => `<th>${escapeHtml(h)}</th>`).join("") +
           "</tr>";
       }
+      let stickyN = 0;
       const bodyEl = document.getElementById(bodyId);
       if (bodyEl) {
         bodyEl.innerHTML = matrix.map((row, i) => {
+          const stickyRow = sticky[i] || [];
           const cells = timeHeaders.map((_, j) => {
             const v = row[j] == null ? "" : String(row[j]).trim();
             if (!v) return '<td class="empty">空</td>';
+            const reason = stickyRow[j] == null ? "" : String(stickyRow[j]).trim();
+            if (reason) {
+              stickyN += 1;
+              return `<td class="sticky-handled" title="${escapeHtml("业务层" + reason + "（引擎宽框粘连）")}">${escapeHtml(v)}</td>`;
+            }
             return `<td>${escapeHtml(v)}</td>`;
           }).join("");
           return `<tr><th>${escapeHtml(labels[i] || (i + 1))}</th>${cells}</tr>`;
@@ -853,10 +980,28 @@
       if (wrap) {
         wrap.style.display = (timeHeaders.length && matrix.length) ? "block" : "none";
       }
+      if (legendId) {
+        let legend = document.getElementById(legendId);
+        if (!legend && wrap && wrap.parentNode) {
+          legend = document.createElement("p");
+          legend.id = legendId;
+          legend.className = "sticky-legend";
+          wrap.parentNode.insertBefore(legend, wrap.nextSibling);
+        }
+        if (legend) {
+          if (stickyN > 0) {
+            legend.innerHTML = `<span class="swatch"></span>粘连业务处理 ${stickyN} 格（蓝底 · 悬停查看拆分/重识）`;
+            legend.style.display = "";
+          } else {
+            legend.innerHTML = "";
+            legend.style.display = "none";
+          }
+        }
+      }
     }
 
-    function renderOcrList(points, headers, rowTags, rows) {
-      renderOcrListInto("ocrHead", "ocrBody", "ocrWrap", points, headers, rowTags, rows);
+    function renderOcrList(points, headers, rowTags, rows, stickyMap) {
+      renderOcrListInto("ocrHead", "ocrBody", "ocrWrap", points, headers, rowTags, rows, stickyMap, "ocrStickyLegend");
     }
 
 
@@ -879,16 +1024,65 @@
       const g = document.getElementById("captureGrid");
       if (g) g.classList.remove("show");
     }
+    function tableRegionPath(side) {
+      const ocr = (side && side.ocr) || {};
+      if (ocr.best_crop_path) return ocr.best_crop_path;
+      const cands = ocr.candidates || (side && side.candidates) || [];
+      const hit = (cands || []).find((c) => c && c.image_path);
+      return (hit && hit.image_path) || "";
+    }
+    function sideCropFallback(side) {
+      if (!side) return { on: false, msg: "", reason: "" };
+      const ocr = side.ocr || {};
+      const reason = String(
+        side.table_crop_fallback_reason
+        || ocr.table_crop_fallback_reason
+        || ""
+      ).trim();
+      const on = !!(
+        side.table_crop_fallback
+        || ocr.table_crop_fallback
+      );
+      const msg = String(
+        side.table_crop_fallback_message
+        || ocr.table_crop_fallback_message
+        || reason
+        || ""
+      ).trim() || "表格区域定位失败，已回退原图";
+      return { on, msg, reason };
+    }
+    function setCropFallbackHint(sideKey, side) {
+      const fb = sideCropFallback(side);
+      const hintEl = document.getElementById(
+        sideKey === "left" ? "cropFbHintL" : "cropFbHintR"
+      );
+      const labEl = document.getElementById(
+        sideKey === "left" ? "labelMonL" : "labelMonR"
+      );
+      if (hintEl) {
+        if (fb.on) {
+          hintEl.textContent = fb.msg;
+          hintEl.classList.add("show");
+        } else {
+          hintEl.textContent = "";
+          hintEl.classList.remove("show");
+        }
+      }
+      return fb;
+    }
     function showDualCapturePreview(data, hint) {
       revokePreviewObjectUrl();
       const left = (data && data.left) || {};
       const right = (data && data.right) || {};
       const leftSrc = data.left_image || left.image_path || left.source_path || "";
       const rightSrc = data.right_image || right.image_path || right.source_path || "";
-      const leftMon = left.monitor_path || left.work_image_path
-        || (left.monitor && left.monitor.monitor_image) || "";
-      const rightMon = right.monitor_path || right.work_image_path
-        || (right.monitor && right.monitor.monitor_image) || "";
+      const leftTable = tableRegionPath(left);
+      const rightTable = tableRegionPath(right);
+      const showTable = !!(leftTable || rightTable);
+      ["monColL", "monColR"].forEach((id) => {
+        const el = document.getElementById(id);
+        if (el) el.style.display = showTable ? "" : "none";
+      });
       latestLeftPath = leftSrc || "";
       latestRightPath = rightSrc || "";
       latestImagePath = leftSrc || rightSrc || latestImagePath || "";
@@ -896,17 +1090,36 @@
       const rTag = right.tag || screenTags.right || "R";
       const lType = left.type || "";
       const rType = right.type || "";
-      const lab = (side, kind, type, tag) =>
-        side + " · " + kind + (type ? " · " + type : "") + (tag ? " · " + tag : "");
-      const elLab = (id, t) => { const e = document.getElementById(id); if (e) e.textContent = t; };
-      elLab("labelSrcL", lab("左", "原图", lType, lTag));
-      elLab("labelSrcR", lab("右", "原图", rType, rTag));
-      elLab("labelMonL", lab("左", "有效区域", lType, lTag));
-      elLab("labelMonR", lab("右", "有效区域", rType, rTag));
+      const lFb = setCropFallbackHint("left", left);
+      const rFb = setCropFallbackHint("right", right);
+      const lab = (sideLabel, kind, type, tag, fb) => {
+        const base = sideLabel + " · " + kind
+          + (type ? " · " + type : "")
+          + (tag ? " · " + tag : "");
+        const on = !!(fb && (fb.on !== undefined ? fb.on : fb));
+        if (!on) return base;
+        const sideObj = sideLabel === "左" ? left : right;
+        const reason = String(
+          (fb && fb.reason)
+          || sideObj.table_crop_fallback_reason
+          || (sideObj.ocr || {}).table_crop_fallback_reason
+          || ""
+        );
+        const mark = reason === "dimmed_modal" ? "蒙板压暗失败" : "表格区域告警";
+        return base + ' <span class="crop-fb">· ' + mark + '</span>';
+      };
+      const elLab = (id, html) => {
+        const e = document.getElementById(id);
+        if (e) e.innerHTML = html;
+      };
+      elLab("labelSrcL", lab("左", "原图", lType, lTag, false));
+      elLab("labelSrcR", lab("右", "原图", rType, rTag, false));
+      elLab("labelMonL", lab("左", "表格区域", lType, lTag, lFb));
+      elLab("labelMonR", lab("右", "表格区域", rType, rTag, rFb));
       setGridImg("previewSrcL", leftSrc, false);
       setGridImg("previewSrcR", rightSrc, false);
-      setGridImg("previewMonL", leftMon || leftSrc, false);
-      setGridImg("previewMonR", rightMon || rightSrc, false);
+      setGridImg("previewMonL", leftTable, false);
+      setGridImg("previewMonR", rightTable, false);
       const g = document.getElementById("captureGrid");
       if (g) g.classList.add("show");
       if (hint != null) imagePathHint.textContent = hint;
@@ -998,6 +1211,7 @@
       // 新抓图后 OCR 结果作废
       clearOcrResult(path ? "已更新图片，请重新执行 OCR。" : "");
       setMsg("ocrWriteMsg", "");
+      clearOcrWriteDetail();
     }
 
     function dayRangeFromInput(dateInputId) {
@@ -1080,8 +1294,10 @@
     }
 
     function defaultRowTags(prefix, n) {
-      const p = (prefix || "").replace(/_+$/, "");
-      return Array.from({ length: Math.max(1, n || 1) }, (_, i) => `${p}_${i + 1}`);
+      const p = (prefix || "").replace(/[._]+$/, "");
+      return Array.from({ length: Math.max(1, n || 1) }, (_, i) =>
+        `${p}.${String(i + 1).padStart(2, "0")}`
+      );
     }
 
     function syncCurveLayout() {
@@ -1091,16 +1307,17 @@
         singleEl.style.display = "none";
         dualEl.style.display = "grid";
         document.getElementById("curveTitleL").textContent =
-          `${screenTitles.left}（${screenTags.left || "L"}_*）`;
+          `${screenTitles.left}（${screenTags.left || "L"}.01…）`;
         document.getElementById("curveTitleR").textContent =
-          `${screenTitles.right}（${screenTags.right || "R"}_*）`;
+          `${screenTitles.right}（${screenTags.right || "R"}.01…）`;
         document.getElementById("curveHint").textContent =
-          "双摄：左右各一图，每条曲线对应该侧 OCR 一行指标（测点 _1…_N）。";
+          "双摄：左右各一图，每条曲线对应该侧 OCR 一行指标（测点 .01….0N）。";
       } else {
         singleEl.style.display = "block";
         dualEl.style.display = "none";
+        const side = currentCameraSide();
         document.getElementById("curveHint").textContent =
-          "单图：一张图展示各行测点曲线（OCR 得到几行就几条）。";
+          `${sideLabel(side)}：一张图展示各行测点曲线（OCR 得到几行就几条；前缀 cameras.${side}.tag）。`;
       }
       requestAnimationFrame(() => {
         Object.values(charts).forEach((c) => c && c.resize());
@@ -1133,35 +1350,45 @@
       if (viewMode === "double") {
         const L = screenTags.left || "L";
         const R = screenTags.right || "R";
-        tagChip.textContent = `左 ${L}_* · 右 ${R}_*`;
-        tagChip.title = `左机组 ${L}_1…_N / 右机组 ${R}_1…_N（同刻 15:00 进各自测点与各自日期）`;
+        tagChip.textContent = `左 ${L}.01… · 右 ${R}.01…`;
+        tagChip.title = `左机组 ${L}.01….0N / 右机组 ${R}.01….0N（同刻 15:00 进各自测点与各自日期）`;
         return;
       }
-      const prefix = currentTag || "—";
-      tagChip.textContent = prefix === "—" ? "测点：—" : `前缀：${prefix} → ${prefix}_1…_N`;
-      if (!tagChip.title) tagChip.title = prefix;
+      const side = currentCameraSide();
+      const prefix = screenTags[side] || currentTag || "—";
+      tagChip.textContent = prefix === "—"
+        ? `${sideLabel(side)}测点：—`
+        : `${sideLabel(side)}：${prefix} → ${prefix}.01…`;
+      tagChip.title = `使用 cameras.${side}.tag（${sideSearchHint(side)}）`;
     }
 
     function syncCaptureActions() {
-      const image = viewMode === "image";
+      const sideUp = isSideUploadMode();
       const cap = document.getElementById("btnCapture");
       const pick = document.getElementById("btnImagePick");
       const ocrPick = document.getElementById("btnOcrPick");
       const title = document.getElementById("captureStepTitle");
-      if (cap) cap.style.display = image ? "none" : "";
-      if (pick) pick.style.display = image ? "" : "none";
-      if (ocrPick) ocrPick.style.display = image ? "none" : "";
-      if (title) title.textContent = image ? "1. 上传图片" : "1. 抓图";
+      if (cap) cap.style.display = sideUp ? "none" : "";
+      if (pick) pick.style.display = sideUp ? "" : "none";
+      if (ocrPick) ocrPick.style.display = sideUp ? "none" : "";
+      if (title) title.textContent = sideUp ? "1. 上传图片" : "1. 抓图";
     }
 
+    let cachedDualCfg = null;
+
     function applyViewMode(mode, dual) {
-      const m = String(mode || "double").toLowerCase();
-      viewMode = (m === "image" || m === "single") ? "image" : "double";
+      viewMode = normalizeViewMode(mode);
       const badge = document.getElementById("modeBadge");
-      badge.textContent = viewMode === "image" ? "单图" : "双摄·两相机";
-      const btnImg = document.getElementById("btnModeImage");
-      if (btnImg) btnImg.classList.toggle("active", viewMode === "image");
+      if (viewMode === "double") {
+        badge.textContent = "双摄·两相机";
+      } else {
+        badge.textContent = sideLabel(viewMode) + "·本机上传";
+      }
+      const btnL = document.getElementById("btnModeLeft");
+      const btnR = document.getElementById("btnModeRight");
       const btnDbl = document.getElementById("btnModeDouble");
+      if (btnL) btnL.classList.toggle("active", viewMode === "left");
+      if (btnR) btnR.classList.toggle("active", viewMode === "right");
       if (btnDbl) btnDbl.classList.toggle("active", viewMode === "double");
       document.getElementById("ocrWrap").style.display = "none";
       if (dual) {
@@ -1170,9 +1397,9 @@
         screenTitles.left = (dual.left && dual.left.title) || "左机组";
         screenTitles.right = (dual.right && dual.right.title) || "右机组";
         document.getElementById("ocrTitleL").textContent =
-          `${screenTitles.left}（${screenTags.left || "L"}_1…N）`;
+          `${screenTitles.left}（${screenTags.left || "L"}.01…）`;
         document.getElementById("ocrTitleR").textContent =
-          `${screenTitles.right}（${screenTags.right || "R"}_1…N）`;
+          `${screenTitles.right}（${screenTags.right || "R"}.01…）`;
       }
       const previewLabel = document.getElementById("previewLabel");
       const sourceRow = document.getElementById("sourceRow");
@@ -1182,58 +1409,48 @@
         if (sourceRow) sourceRow.classList.remove("show");
         if (dualPrev) dualPrev.style.display = "none";
         document.getElementById("captureHint").textContent =
-          "并行抓取左右两路摄像头；上排原图，下排有效区域（下一步识别用）。";
+          "并行抓取左右两路摄像头。各侧仅在 cameras.*.table_search 内做 auto，失败本轮结束。";
         document.getElementById("ocrHint").innerHTML =
-          "双摄：左右相机各自 OCR。先识别左上角<strong>日期筛选框</strong>，再识别表格；测点前缀见 cameras.*.tag。";
+          "双摄：左右各自 search 窗内 auto 识别；失败不试 fixed/原图，等下一轮抓拍。测点前缀见 cameras.*.tag。";
         document.getElementById("tagModalSingle").style.display = "none";
         document.getElementById("tagModalDual").style.display = "block";
         document.getElementById("btnTagSave").style.display = "none";
         document.getElementById("tagModalTitle").textContent = "双摄测点前缀（只读）";
         document.getElementById("tagModalHint").textContent =
           "请在 config.yaml 的 cameras.left.tag / cameras.right.tag 修改。";
-      } else if (viewMode === "dual") {
-        if (capGrid) capGrid.classList.remove("show");
-        document.getElementById("captureHint").textContent =
-          "抓取「左右两个标签页」同屏画面；下方先显示原图，OCR 后再按 capture.dual 裁成左右半屏预览。";
-        document.getElementById("ocrHint").innerHTML =
-          "双屏：左右独立 OCR。各半屏先识别左上角<strong>日期筛选框</strong>（唯一业务日），再识别表格；日期失败则该侧直接失败并跳过表格。";
-        document.getElementById("tagModalSingle").style.display = "none";
-        document.getElementById("tagModalDual").style.display = "block";
-        document.getElementById("btnTagSave").style.display = "none";
-        document.getElementById("tagModalTitle").textContent = "双屏测点前缀（只读）";
-        document.getElementById("tagModalHint").textContent =
-          "请在 config.yaml 的 capture.dual.left.tag / right.tag 修改。";
-        if (previewLabel) previewLabel.textContent = "原图（双屏整图）";
       } else {
+        const side = currentCameraSide();
         if (capGrid) capGrid.classList.remove("show");
         if (dualPrev) dualPrev.style.display = "none";
         document.getElementById("captureHint").textContent =
-          "手动上传一张本机图片，上传后直接进行 OCR 识别。";
+          `上传${sideLabel(side)}整屏图，识别走 cameras.${side}：${sideSearchHint(side)}。`;
         document.getElementById("ocrHint").innerHTML =
-          "单图：选择一张图片后自动识别。先 OCR 左上角<strong>日期筛选框</strong>，再识别表头时刻与数据行；日期失败则直接失败。";
-        document.getElementById("tagModalSingle").style.display = "block";
-        document.getElementById("tagModalDual").style.display = "none";
-        document.getElementById("btnTagSave").style.display = "";
-        document.getElementById("tagModalTitle").textContent = "配置测点前缀";
+          `${sideLabel(side)}：选择一张本机图片后自动识别，先验窗与测点前缀同联调「${sideLabel(side)}」配置（cameras.${side}.table_search / tag）。`;
+        document.getElementById("tagModalSingle").style.display = "none";
+        document.getElementById("tagModalDual").style.display = "block";
+        document.getElementById("btnTagSave").style.display = "none";
+        document.getElementById("tagModalTitle").textContent =
+          `${sideLabel(side)}测点前缀（只读）`;
         document.getElementById("tagModalHint").textContent =
-          "一行数据 → 前缀_1…_N。写入 config.yaml 的 capture.single.tag。";
+          `请在 config.yaml 的 cameras.${side}.tag 修改。当前识别亦使用该侧 table_search。`;
         document.getElementById("ocrDualWrap").style.display = "none";
-        if (previewLabel) previewLabel.textContent = "原图";
+        if (previewLabel) {
+          previewLabel.textContent = sideLabel(side) + " · 原图";
+        }
+        currentTag = screenTags[side] || currentTag || "";
       }
       refreshTagChip();
       syncCurveLayout();
       syncCaptureActions();
     }
 
-    let cachedDualCfg = null;
-
     function switchViewMode(mode) {
-      const raw = String(mode || "double").toLowerCase();
-      const next = (raw === "image" || raw === "single") ? "image" : "double";
+      const next = normalizeViewMode(mode);
       if (next === viewMode) return;
-      const label = next === "image" ? "单图" : "双摄";
+      const label = next === "double" ? "双摄" : sideLabel(next);
       clearOcrResult(`已切换为${label}，请重新识别。`);
       setMsg("ocrWriteMsg", "");
+      clearOcrWriteDetail();
       setMsg("curveMsg", "");
       setMsg("captureMsg", "");
       latestImagePath = "";
@@ -1253,10 +1470,15 @@
       clearCaptureGrid();
       clearMonitorPreview();
       applyViewMode(next, cachedDualCfg);
-      toast("模式已切换", next === "image" ? "单图·手动上传" : "双摄·两相机", true);
+      toast(
+        "模式已切换",
+        next === "double" ? "双摄·两相机" : `${sideLabel(next)}·本机上传（${sideSearchHint(next)}）`,
+        true
+      );
     }
 
-    document.getElementById("btnModeImage").onclick = () => switchViewMode("image");
+    document.getElementById("btnModeLeft").onclick = () => switchViewMode("left");
+    document.getElementById("btnModeRight").onclick = () => switchViewMode("right");
     document.getElementById("btnModeDouble").onclick = () => switchViewMode("double");
     document.getElementById("btnImagePick").onclick = () => {
       document.getElementById("ocrFile").click();
@@ -1283,8 +1505,10 @@
           screenTags.left = (data.cameras.left && data.cameras.left.tag) || screenTags.left;
           screenTags.right = (data.cameras.right && data.cameras.right.tag) || screenTags.right;
         }
+        // 配置仍可能是 single：联调上传改为左摄/右摄，默认落左摄
         const initMode = (data.mode === "double" || data.capture_mode === "double_camera")
-          ? "double" : (data.mode || "single");
+          ? "double"
+          : (data.mode === "right" ? "right" : "left");
         applyViewMode(initMode, cachedDualCfg);
         document.getElementById("tagInputL").value = screenTags.left || "";
         document.getElementById("tagInputR").value = screenTags.right || "";
@@ -1323,15 +1547,19 @@
           right_image: data.right_image || right.source_path || "",
           left: {
             image_path: left.source_path || data.left_image || "",
-            monitor_path: (left.monitor && left.monitor.monitor_image) || left.monitor_path || left.image_path || "",
-            work_image_path: left.image_path || "",
+            ocr: leftOcr,
             tag: left.tag, type: left.type, host: left.host,
+            table_crop_fallback: left.table_crop_fallback,
+            table_crop_fallback_reason: left.table_crop_fallback_reason,
+            table_crop_fallback_message: left.table_crop_fallback_message,
           },
           right: {
             image_path: right.source_path || data.right_image || "",
-            monitor_path: (right.monitor && right.monitor.monitor_image) || right.monitor_path || right.image_path || "",
-            work_image_path: right.image_path || "",
+            ocr: rightOcr,
             tag: right.tag, type: right.type, host: right.host,
+            table_crop_fallback: right.table_crop_fallback,
+            table_crop_fallback_reason: right.table_crop_fallback_reason,
+            table_crop_fallback_message: right.table_crop_fallback_message,
           },
         }, latestUploadName ? ("当前图片（本机上传）：" + latestUploadName) : null);
       } else {
@@ -1358,12 +1586,16 @@
       renderOcrListInto(
         "ocrHeadL", "ocrBodyL", "ocrWrapL",
         leftOcr.points || left.points || [],
-        leftOcr.headers, leftOcr.row_tags, leftOcr.rows
+        leftOcr.headers, leftOcr.row_tags, leftOcr.rows,
+        leftOcr.sticky_map || left.sticky_map || [],
+        "ocrStickyLegendL"
       );
       renderOcrListInto(
         "ocrHeadR", "ocrBodyR", "ocrWrapR",
         rightOcr.points || right.points || [],
-        rightOcr.headers, rightOcr.row_tags, rightOcr.rows
+        rightOcr.headers, rightOcr.row_tags, rightOcr.rows,
+        rightOcr.sticky_map || right.sticky_map || [],
+        "ocrStickyLegendR"
       );
 
       const leftDateFail = formatDateFail(left);
@@ -1371,12 +1603,26 @@
       const failParts = [];
       if (leftDateFail) failParts.push(`左：${leftDateFail}`);
       if (rightDateFail) failParts.push(`右：${rightDateFail}`);
+      const lFb = sideCropFallback(left);
+      const rFb = sideCropFallback(right);
+
+      function sideFailTip(side, fb, dateFail, label) {
+        if (dateFail) return `${label}：${dateFail}`;
+        if (fb && fb.on && fb.msg) return `${label}：${fb.msg}`;
+        const msg = side.message || (side.ocr && side.ocr.message) || "";
+        if (msg) return `${label}：${msg}`;
+        return "";
+      }
 
       if (!points.length) {
         ocrReady = false;
         btnOcrWrite.disabled = true;
-        const tip = failParts.length
-          ? ("双摄日期 OCR 失败（已跳过表格）：" + failParts.join("；"))
+        const why = [
+          sideFailTip(left, lFb, leftDateFail, "左"),
+          sideFailTip(right, rFb, rightDateFail, "右"),
+        ].filter(Boolean);
+        const tip = why.length
+          ? ("双摄识别失败：" + why.join("；"))
           : (data.message || "双摄识别完成，但左右均无有效点。");
         setMsg("ocrMsg", tip, "err");
         toast("OCR 失败", tip, false);
@@ -1387,10 +1633,19 @@
       let tip =
         `双摄 OCR：左 ${left.point_count || 0} 点（${left.base_date || "?"} · ${left.date_source || "ocr"} · ${left.tag || ""}）` +
         ` · 右 ${right.point_count || 0} 点（${right.base_date || "?"} · ${right.date_source || "ocr"} · ${right.tag || ""}）`;
+      const fbParts = [];
+      if (lFb.on) fbParts.push("左：" + lFb.msg);
+      if (rFb.on) fbParts.push("右：" + rFb.msg);
+      if (fbParts.length) {
+        tip += "；表格区域：" + fbParts.join("；");
+      }
       if (failParts.length) {
         tip += "；部分失败：" + failParts.join("；");
         setMsg("ocrMsg", tip, "warn");
         toast("双摄部分成功", tip, true);
+      } else if (fbParts.length) {
+        setMsg("ocrMsg", tip, "warn");
+        toast("双摄 OCR（含表格区域告警）", tip, true);
       } else {
         setMsg("ocrMsg", tip, "ok");
         toast("双摄 OCR 成功", tip, true);
@@ -1451,7 +1706,11 @@
         btnOcrWrite.disabled = true;
         ocrWrap.style.display = "none";
         ocrBody.innerHTML = "";
+        const fb = sideCropFallback(data.ocr ? { ...data, ocr: data.ocr } : data);
         const tip = dateFail
+          || (fb.on && fb.msg)
+          || data.table_crop_fallback_message
+          || (data.ocr && data.ocr.table_crop_fallback_message)
           || data.message
           || ((sourceLabel || "识别") + "完成，但未解析到有效「时间点+数值」。请检查图片/裁剪。");
         setMsg("ocrMsg", tip, "err");
@@ -1461,7 +1720,13 @@
       ocrReady = true;
       btnOcrWrite.disabled = false;
       document.getElementById("ocrDualWrap").style.display = "none";
-      renderOcrList(points, data.headers, data.row_tags, data.rows);
+      renderOcrList(
+        points,
+        data.headers,
+        data.row_tags,
+        data.rows,
+        data.sticky_map || (data.ocr && data.ocr.sticky_map) || []
+      );
       lastOcrSides.single = {
         rowTags: Array.isArray(data.row_tags) ? data.row_tags.slice() : [],
         baseDate: data.base_date || "",
@@ -1470,11 +1735,31 @@
       const nRows = Array.isArray(data.row_tags) && data.row_tags.length
         ? data.row_tags.length
         : (Array.isArray(data.rows) ? data.rows.length : 0);
-      const tip =
+      const camSide = data.camera_side || (isSideUploadMode() ? currentCameraSide() : "");
+      let tip =
         `${sourceLabel || "识别"}成功：业务日 ${data.base_date || "?"}（${data.date_source || "ocr"}）· ` +
         `${nTimes} 个时间点 × ${nRows || "N"} 行测点（共 ${points.length} 值）`;
-      setMsg("ocrMsg", tip, "ok");
-      toast("OCR 成功", tip, true);
+      if (camSide) {
+        tip += ` · ${sideLabel(camSide)}`;
+        if (data.table_search) tip += ` search=${data.table_search}`;
+      }
+      const ocrBlock = data.ocr || data;
+      const singleFb = sideCropFallback({
+        table_crop_fallback: data.table_crop_fallback ?? ocrBlock.table_crop_fallback,
+        table_crop_fallback_message:
+          data.table_crop_fallback_message || ocrBlock.table_crop_fallback_message,
+        table_crop_fallback_reason:
+          data.table_crop_fallback_reason || ocrBlock.table_crop_fallback_reason,
+        ocr: ocrBlock,
+      });
+      if (singleFb.on) {
+        tip += "；" + singleFb.msg;
+        setMsg("ocrMsg", tip, "warn");
+        toast("OCR 成功（表格区域已回退原图）", tip, true);
+      } else {
+        setMsg("ocrMsg", tip, "ok");
+        toast("OCR 成功", tip, true);
+      }
       return true;
     }
 
@@ -1492,6 +1777,7 @@
             showDualCapturePreview(data);
             clearOcrResult("已更新抓图，请重新执行 OCR。");
             setMsg("ocrWriteMsg", "");
+            clearOcrWriteDetail();
             const tip = (hasL ? "左OK" : "左失败") + " / " + (hasR ? "右OK" : "右失败");
             setMsg("captureMsg", "抓图成功 · " + tip, "ok");
             toast("抓图成功", tip, true);
@@ -1522,16 +1808,22 @@
           return;
         }
       } else if (!latestImagePath) {
-        const tip = viewMode === "image"
-          ? "请先选择一张本机图片。"
+        const tip = isSideUploadMode()
+          ? `请先选择一张${sideLabel(currentCameraSide())}本机图片。`
           : "请先抓图，或使用「选择本机图片 OCR」。";
         setMsg("ocrMsg", tip, "warn");
         toast("无法 OCR", "还没有当前图片", false);
         return;
       }
-      setMsg("ocrMsg", viewMode === "double" ? "双摄识别中…" : "识别中…");
+      setMsg(
+        "ocrMsg",
+        viewMode === "double"
+          ? "双摄识别中…"
+          : `${sideLabel(currentCameraSide())}识别中…`
+      );
       clearOcrResult();
       setMsg("ocrWriteMsg", "");
+      clearOcrWriteDetail();
       try {
         if (viewMode === "double") {
           const body = {};
@@ -1547,24 +1839,17 @@
             body: JSON.stringify(body),
           });
           applyDualOcrResult(data);
-        } else if (viewMode === "dual") {
-          const data = await call("/api/ocr/dual", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              image_path: latestImagePath,
-            })
-          });
-          applyDualOcrResult(data);
         } else {
+          const side = currentCameraSide();
           const data = await call("/api/ocr", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
               image_path: latestImagePath,
+              side,
             })
           });
-          applyOcrResult(data, "当前图 OCR");
+          applyOcrResult(data, `${sideLabel(side)} OCR`);
         }
       } catch (e) {
         ocrReady = false;
@@ -1592,9 +1877,16 @@
       const file = ev.target.files && ev.target.files[0];
       ev.target.value = "";
       if (!file) return;
-      setMsg("ocrMsg", viewMode === "double" ? "上传并双摄识别中…" : "上传并识别中…");
+      const side = currentCameraSide();
+      setMsg(
+        "ocrMsg",
+        viewMode === "double"
+          ? "上传并双摄识别中…"
+          : `上传并${sideLabel(side)}识别中…`
+      );
       clearOcrResult();
       setMsg("ocrWriteMsg", "");
+      clearOcrWriteDetail();
       setMsg("captureMsg", "");
       try {
         if (viewMode === "double") {
@@ -1613,13 +1905,18 @@
         } else {
           const fd = new FormData();
           fd.append("file", file, file.name);
+          fd.append("side", side);
           const data = await call("/api/ocr/upload", { method: "POST", body: fd });
-          applyOcrResult(data, "本机图片 OCR", file);
+          applyOcrResult(data, `${sideLabel(side)}本机图片 OCR`, file);
           const shown = displayFileLabel(data, file.name) || file.name || "";
           const disk = data.source_copy || "";
+          const searchNote = data.table_search
+            ? `　·　search=${data.table_search}`
+            : "";
           setMsg(
             "captureMsg",
-            "已选用本机图片：" + shown
+            `已按${sideLabel(side)}识别：` + shown
+              + searchNote
               + (disk ? "　·　落盘：" + disk : "（未写入抓图目录）"),
             "ok"
           );
@@ -1639,6 +1936,7 @@
         return;
       }
       setMsg("ocrWriteMsg", "写入中…");
+      clearOcrWriteDetail();
       try {
         // 双屏：绝不传统一 tag，严格按点内 tag（左右前缀已写在点上）+ 各自 timestamp
         // 带上 OCR 落盘的 run_id，写成功后把执行履历从「待写PI」改为成功
@@ -1651,6 +1949,12 @@
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(body)
         });
+        const items = data.items
+          || (data.pi && data.pi.items)
+          || (data.run && data.run.pi && data.run.pi.items)
+          || [];
+        renderOcrWriteDetail(items);
+        const failItems = items.filter((it) => !it.ok && !it.skipped);
         const runTip = (data.run && data.run.result_status)
           ? ` · 履历 ${data.run.result_status}`
           : (lastRunId ? ` · 履历 ${lastRunId}` : "");
@@ -1661,16 +1965,18 @@
           setMsg("ocrWriteMsg", tip, "ok");
           toast("OCR→PI 成功", `${data.written}/${data.total} 点已写入`, true);
         } else {
-          const fail = (data.items || []).find((it) => !it.ok) || {};
+          const fail = failItems[0] || {};
           const why = fail.message || (fail.pi_code != null ? `code=${fail.pi_code}` : "");
+          const extra = failItems.length > 1 ? `（另有 ${failItems.length - 1} 点失败）` : "";
           setMsg(
             "ocrWriteMsg",
-            `写入未全部成功：${data.written}/${data.total}${why ? " · " + why : ""}${runTip}`,
+            `写入未全部成功：${data.written}/${data.total}${why ? " · " + why : ""}${extra}${runTip}`,
             "err"
           );
           toast("OCR→PI 部分失败", `${data.written}/${data.total}`, false);
         }
       } catch (e) {
+        clearOcrWriteDetail();
         setMsg("ocrWriteMsg", "写入失败：" + e.message, "err");
         toast("OCR→PI 失败", e.message, false);
       }
@@ -1724,10 +2030,10 @@
           syncCurveLayout();
           const leftTags = lastOcrSides.left.rowTags.length
             ? lastOcrSides.left.rowTags
-            : defaultRowTags(screenTags.left || "GX.DEMO.OCR.L", 3);
+            : defaultRowTags(screenTags.left || "GXPC.OCR.L", 3);
           const rightTags = lastOcrSides.right.rowTags.length
             ? lastOcrSides.right.rowTags
-            : defaultRowTags(screenTags.right || "GX.DEMO.OCR.R", 3);
+            : defaultRowTags(screenTags.right || "GXPC.OCR.R", 3);
           const L = dayRangeFromBizDate(lastOcrSides.left.baseDate);
           const R = dayRangeFromBizDate(lastOcrSides.right.baseDate);
           const [leftSeries, rightSeries] = await Promise.all([
@@ -1750,11 +2056,15 @@
           syncCurveLayout();
           const tags = lastOcrSides.single.rowTags.length
             ? lastOcrSides.single.rowTags
-            : defaultRowTags(currentTag || "GX.DEMO.OCR", 1);
+            : defaultRowTags(currentTag || "GXPC.OCR", 1);
           const range = dayRangeFromBizDate(lastOcrSides.single.baseDate);
           const series = await fetchCurveSeries(tags, range.start, range.end);
           const c = ensureChart("S", "chart");
-          renderMultiCurve(c, `单图 · ${range.day}`, series);
+          renderMultiCurve(
+            c,
+            `${isSideUploadMode() ? sideLabel(currentCameraSide()) : "单侧"} · ${range.day}`,
+            series
+          );
           c.resize();
           setMsg("curveMsg", `已加载 ${series.length} 条测点曲线 · ${range.day}（按 OCR 业务日）`, "ok");
           toast("读曲线成功", `${series.length} 条`, true);
@@ -1777,7 +2087,8 @@
       document.getElementById("tagModal").classList.remove("show");
     };
     document.getElementById("btnTagSave").onclick = async () => {
-      if (viewMode === "dual") {
+      // 左摄/右摄/双摄测点前缀只读（cameras.*.tag）
+      if (viewMode === "double" || isSideUploadMode()) {
         document.getElementById("tagModal").classList.remove("show");
         return;
       }
@@ -1804,7 +2115,81 @@
     window.addEventListener("resize", () => {
       Object.values(charts).forEach((c) => c && c.resize());
     });
-    loadViewConfig().then(() => loadPiConfig());
+
+    /** 履历详情「重新识别」：?mode=&image=&left=&right=&from_run= 载入原图并 OCR（落新履历） */
+    async function applyReocrFromQuery() {
+      const qs = new URLSearchParams(location.search || "");
+      const fromRun = (qs.get("from_run") || "").trim();
+      const image = (qs.get("image") || "").trim();
+      const left = (qs.get("left") || "").trim();
+      const right = (qs.get("right") || "").trim();
+      const modeRaw = (qs.get("mode") || "").trim();
+      if (!modeRaw && !image && !left && !right) return false;
+
+      const vm = normalizeViewMode(
+        modeRaw || (left || right ? "double" : "left")
+      );
+      applyViewMode(vm, cachedDualCfg);
+
+      if (vm === "double") {
+        if (!left && !right) {
+          setMsg("ocrMsg", "重识别缺少左右原图路径。", "warn");
+          toast("无法重识别", "缺少原图路径", false);
+          return false;
+        }
+        const hintParts = [];
+        if (fromRun) hintParts.push("重识别自履历 " + fromRun);
+        if (left) hintParts.push("左 " + left);
+        if (right) hintParts.push("右 " + right);
+        showDualCapturePreview(
+          { left_image: left, right_image: right },
+          hintParts.join("　|　")
+        );
+      } else {
+        const path = image || left || right;
+        if (!path) {
+          setMsg("ocrMsg", "重识别缺少原图路径。", "warn");
+          toast("无法重识别", "缺少原图路径", false);
+          return false;
+        }
+        latestImagePath = path;
+        latestUploadName = "";
+        latestLeftPath = "";
+        latestRightPath = "";
+        clearMonitorPreview();
+        showSourcePreview(
+          path,
+          fromRun
+            ? ("重识别自履历 " + fromRun + "　·　当前图片：" + path)
+            : ("当前图片：" + path)
+        );
+      }
+
+      if (history.replaceState) {
+        history.replaceState(null, "", location.pathname);
+      }
+
+      toast(
+        "已载入履历原图",
+        fromRun ? ("来源：" + fromRun + "，开始重新识别…") : "开始重新识别…",
+        true
+      );
+      setMsg(
+        "ocrMsg",
+        fromRun
+          ? ("已载入履历 " + fromRun + " 原图，重新识别中…")
+          : "已载入原图，重新识别中…"
+      );
+
+      // 走现有 OCR 按钮逻辑，落盘为新 run
+      const btn = document.getElementById("btnOcr");
+      if (btn) btn.click();
+      return true;
+    }
+
+    loadViewConfig()
+      .then(() => loadPiConfig())
+      .then(() => applyReocrFromQuery());
   </script>
 </body>
 </html>

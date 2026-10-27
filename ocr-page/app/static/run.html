@@ -153,6 +153,29 @@
     }
     .links button.copy-path:hover { text-decoration: underline; }
     .links button.copy-path.copied { color: var(--ok); }
+    a.btn-reocr {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 6px 14px;
+      border-radius: 8px;
+      background: rgba(47, 127, 209, 0.22);
+      border: 1px solid rgba(47, 127, 209, 0.55);
+      color: #9ec5ef;
+      font-size: 0.88rem;
+      font-weight: 600;
+      text-decoration: none;
+      cursor: pointer;
+      font-family: inherit;
+    }
+    a.btn-reocr:hover {
+      background: rgba(47, 127, 209, 0.34);
+      color: #cfe4fa;
+    }
+    a.btn-reocr[aria-disabled="true"] {
+      opacity: 0.45;
+      pointer-events: none;
+    }
     .table-wrap {
       overflow: auto;
       max-height: 360px;
@@ -174,6 +197,16 @@
     }
     th { background: #1b2833; position: sticky; top: 0; }
     td.empty { background: rgba(212,91,99,0.12); color: var(--empty); }
+    td.pi-ok { color: var(--ok); }
+    td.pi-fail { color: var(--err); background: rgba(212,91,99,0.10); }
+    td.pi-skip { color: var(--warn); }
+    td.pi-msg { text-align: left; white-space: normal; max-width: 360px; color: var(--muted); }
+    .pi-write-stat {
+      margin: 0 0 10px;
+      color: var(--muted);
+      font-size: 0.85rem;
+      line-height: 1.45;
+    }
     td.gap-filled {
       background: rgba(201,162,39,0.18);
       color: #e8c547;
@@ -194,6 +227,35 @@
     }
     td.gap-filled:hover {
       background: rgba(201,162,39,0.3);
+    }
+    td.sticky-handled {
+      background: rgba(56, 139, 253, 0.20);
+      color: #79b8ff;
+      cursor: help;
+      box-shadow: inset 0 0 0 1px rgba(56, 139, 253, 0.45);
+      position: relative;
+    }
+    td.sticky-handled::after {
+      content: '粘';
+      position: absolute;
+      top: 0;
+      right: 1px;
+      font-size: 0.58rem;
+      line-height: 1;
+      opacity: 0.9;
+      color: #58a6ff;
+      pointer-events: none;
+    }
+    td.sticky-handled:hover {
+      background: rgba(56, 139, 253, 0.32);
+    }
+    td.gap-filled.sticky-handled {
+      background: linear-gradient(
+        135deg,
+        rgba(201,162,39,0.22) 0%,
+        rgba(56, 139, 253, 0.22) 100%
+      );
+      color: #e8c547;
     }
     .gap-legend {
       margin: 8px 0 0;
@@ -739,6 +801,70 @@
     /** 各侧最终结果表（胜出者 + 空格补录），供候选弹窗对照 */
     const sideFinalStore = {};
 
+    function escHtml(s) {
+      return String(s == null ? '' : s)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;');
+    }
+
+    function piItemStatus(it) {
+      if (it && it.skipped) return { cls: 'pi-skip', text: '跳过' };
+      if (it && it.ok) return { cls: 'pi-ok', text: '成功' };
+      return { cls: 'pi-fail', text: '失败' };
+    }
+
+    function renderPiWriteSection(pi) {
+      const items = Array.isArray(pi && pi.items) ? pi.items : [];
+      if (pi && pi.skipped && !items.length) {
+        return `<section class="card">
+          <h2>写 PI 明细</h2>
+          <p class="pi-write-stat">本轮跳过写 PI${pi.message ? ' · ' + escHtml(pi.message) : ''}</p>
+        </section>`;
+      }
+      if (!items.length) {
+        const written = pi && pi.written != null ? pi.written : '-';
+        const total = pi && pi.total != null ? pi.total : '-';
+        return `<section class="card">
+          <h2>写 PI 明细</h2>
+          <p class="pi-write-stat">汇总 ${written}/${total}${pi && pi.message ? ' · ' + escHtml(pi.message) : ''}（旧履历无逐点明细；新执行后可查看）</p>
+        </section>`;
+      }
+      const okN = items.filter((it) => it.ok && !it.skipped).length;
+      const failN = items.filter((it) => !it.ok && !it.skipped).length;
+      const skipN = items.filter((it) => it.skipped).length;
+      let rows = '';
+      for (const it of items) {
+        const st = piItemStatus(it);
+        const code = it.skipped ? '-' : (it.pi_code != null ? it.pi_code : '-');
+        const reason = it.message || it.reason || '';
+        rows += `<tr>
+          <td>${escHtml(it.timestamp || '')}</td>
+          <td>${escHtml(it.time_label || '')}</td>
+          <td>${escHtml(it.tag || '')}</td>
+          <td>${it.value != null ? escHtml(it.value) : ''}</td>
+          <td class="${st.cls}">${st.text}</td>
+          <td>${escHtml(code)}</td>
+          <td class="pi-msg">${escHtml(reason)}</td>
+        </tr>`;
+      }
+      return `<section class="card">
+        <h2>写 PI 明细</h2>
+        <p class="pi-write-stat">成功 ${okN} · 失败 ${failN} · 跳过 ${skipN} · 合计 ${items.length}${
+          pi.message ? ' · ' + escHtml(pi.message) : ''
+        }</p>
+        <div class="table-wrap" style="max-height:420px;">
+          <table>
+            <thead><tr>
+              <th>时刻</th><th>标签</th><th>测点</th><th>值</th><th>结果</th><th>code</th><th>原因</th>
+            </tr></thead>
+            <tbody>${rows}</tbody>
+          </table>
+        </div>
+      </section>`;
+    }
+
     function badgeHtml(run) {
       if (run.mode === 'dual') {
         if (run.left_ok && run.right_ok) return '<span class="badge ok">成功</span>';
@@ -838,10 +964,10 @@
         .replace(/"/g, '&quot;');
     }
 
-    function renderOcrPane(title, sub, headers, rows, extraClass, gapFillMap, rowTags) {
+    function renderOcrPane(title, sub, headers, rows, extraClass, gapFillMap, rowTags, stickyMap) {
       const cls = extraClass ? ` ${extraClass}` : '';
       const body = (headers && headers.length)
-        ? renderTable(headers, rows || [], rowTags, gapFillMap)
+        ? renderTable(headers, rows || [], rowTags, gapFillMap, stickyMap)
         : '<p class="compare-note">无识别表格</p>';
       return `<div class="ocr-pane${cls}">
         <h3>${escapeHtml(title)}${sub ? ` <span class="pane-sub">${escapeHtml(sub)}</span>` : ''}</h3>
@@ -854,8 +980,12 @@
       const selName = candFileName(selected);
       const final = finalSide || {};
       const gapN = Number(final.gap_filled || 0) || 0;
-      const finalSub = gapN > 0
-        ? `胜出表 + 补录 ${gapN} 格`
+      const stickyN = Number(final.sticky_filled || 0) || 0;
+      const parts = [];
+      if (gapN > 0) parts.push(`补录 ${gapN} 格`);
+      if (stickyN > 0) parts.push(`粘连 ${stickyN} 格`);
+      const finalSub = parts.length
+        ? `胜出表 + ${parts.join(' · ')}`
         : '胜出表（无补录）';
       let html = renderOcrPane(
         '最终结果',
@@ -864,14 +994,18 @@
         final.rows || [],
         'highlight-win',
         final.gap_fill_map || [],
-        final.row_tags || []
+        final.row_tags || [],
+        final.sticky_map || []
       );
       html += renderOcrPane(
         '本候选',
         selName + (selected.status === 'winner' ? ' · 胜出原表' : ''),
         selected.headers,
         selected.rows,
-        'highlight-sel'
+        'highlight-sel',
+        selected.gap_fill_map || [],
+        selected.row_tags || [],
+        selected.sticky_map || []
       );
       return html;
     }
@@ -937,6 +1071,41 @@
       if (!path) return '';
       const text = label || '复制图片路径';
       return `<button type="button" class="copy-path" data-copy-path="${escapeAttr(path)}" title="${escapeAttr(path)}">${text}</button>`;
+    }
+
+    /** 用履历原图进联调页重识；OCR 会落盘为新记录 */
+    function buildReocrUrl(run) {
+      if (!run) return '';
+      const left = run.left || {};
+      const right = run.right || {};
+      const isDual = run.mode === 'dual'
+        || run.capture_mode === 'double_camera'
+        || run.mode === 'double';
+      const qs = new URLSearchParams();
+      if (run.id) qs.set('from_run', String(run.id));
+      if (isDual) {
+        const lp = String(run.left_capture_path || left.source_path || '').trim();
+        const rp = String(run.right_capture_path || right.source_path || '').trim();
+        if (!lp && !rp) return '';
+        qs.set('mode', 'double');
+        if (lp) qs.set('left', lp);
+        if (rp) qs.set('right', rp);
+      } else {
+        const path = String(run.source_path || run.capture_path || '').trim();
+        if (!path) return '';
+        const side = String(run.camera_side || run.side || 'left').toLowerCase();
+        qs.set('mode', side === 'right' ? 'right' : 'left');
+        qs.set('image', path);
+      }
+      return '/debug?' + qs.toString();
+    }
+
+    function reocrBtn(run) {
+      const href = buildReocrUrl(run);
+      if (!href) {
+        return `<a class="btn-reocr" aria-disabled="true" title="无可用原图路径，无法重识别">重新识别</a>`;
+      }
+      return `<a class="btn-reocr" href="${escapeAttr(href)}" title="用本记录原图进入联调页重新识别（将产生新履历）">重新识别</a>`;
     }
 
     async function copyText(text) {
@@ -1107,27 +1276,40 @@
       if (e.key === 'Escape') closePreview();
     });
 
-    function renderTable(headers, rows, rowTags, gapFillMap) {
+    function renderTable(headers, rows, rowTags, gapFillMap, stickyMap) {
       if (!headers || !headers.length) {
         return '<p style="color:var(--muted);font-size:0.88rem;margin:10px 0 0;">无识别表格</p>';
       }
       const labels = rowTags && rowTags.length ? rowTags : rows.map((_, i) => `行${i + 1}`);
       const gapMap = Array.isArray(gapFillMap) ? gapFillMap : [];
+      const sticky = Array.isArray(stickyMap) ? stickyMap : [];
       let html = '<div class="table-wrap"><table><thead><tr><th>指标</th>';
       for (const h of headers) html += `<th>${escapeHtml(h)}</th>`;
       html += '</tr></thead><tbody>';
       rows.forEach((row, i) => {
         html += `<tr><th>${escapeHtml(labels[i] || i + 1)}</th>`;
         const gapRow = gapMap[i] || [];
+        const stickyRow = sticky[i] || [];
         for (let j = 0; j < headers.length; j++) {
           const v = row[j] == null ? '' : String(row[j]).trim();
           const src = gapRow[j] == null ? '' : String(gapRow[j]).trim();
+          const stickyReason = stickyRow[j] == null ? '' : String(stickyRow[j]).trim();
           if (!v) {
             html += '<td class="empty">空</td>';
-          } else if (src) {
-            html += `<td class="gap-filled" title="${escapeAttr('补录自 ' + src)}">${escapeHtml(v)}</td>`;
           } else {
-            html += `<td>${escapeHtml(v)}</td>`;
+            const cls = [];
+            const tips = [];
+            if (src) {
+              cls.push('gap-filled');
+              tips.push('补录自 ' + src);
+            }
+            if (stickyReason) {
+              cls.push('sticky-handled');
+              tips.push('业务层' + stickyReason + '（引擎宽框粘连）');
+            }
+            const classAttr = cls.length ? ` class="${cls.join(' ')}"` : '';
+            const titleAttr = tips.length ? ` title="${escapeAttr(tips.join('；'))}"` : '';
+            html += `<td${classAttr}${titleAttr}>${escapeHtml(v)}</td>`;
           }
         }
         html += '</tr>';
@@ -1165,79 +1347,105 @@
       return renderCandFold('裁剪候选', cards, cands.length);
     }
 
-    function renderDateOcrCard(ctx) {
-      if (!ctx) return '';
-      const meta = ctx.date_ocr || {};
-      const bestUrl = ctx.date_best_url || meta.best_image_url || '';
-      const hasImg = !!bestUrl;
-      const dateOk = meta.ok === true || !!(ctx.base_date || meta.date_str);
-      const baseDate = ctx.base_date || meta.date_str || '-';
-      const source = ctx.date_source || meta.date_source || '-';
-      const reason = meta.reason || '';
-      const reasonLabel = ctx.date_reason_label || reason || '';
-      const message = meta.message || '';
-      const raw = (meta.raw_texts || []).slice(0, 8).join(' · ');
-      if (!hasImg && meta.ok !== true && meta.ok !== false && !ctx.base_date && !reason) {
-        return '';
+    function pickTableView(ctx) {
+      const hasHead = (h) => Array.isArray(h) && h.length > 0;
+      let headers = ctx.headers || [];
+      let rows = ctx.rows || [];
+      let rowTags = ctx.row_tags || [];
+      let gapMap = ctx.gap_fill_map || [];
+      let stickyMap = ctx.sticky_map || [];
+      if (!hasHead(headers)) {
+        const cands = ctx.candidates || [];
+        const win = cands.find((c) => c && c.status === 'winner' && hasHead(c.headers))
+          || cands.find((c) => c && hasHead(c.headers));
+        if (win) {
+          headers = win.headers;
+          rows = win.rows || [];
+          rowTags = win.row_tags || rowTags;
+          gapMap = win.gap_fill_map || gapMap;
+          stickyMap = win.sticky_map || stickyMap;
+        }
       }
-      const isSystem = String(source) === 'system';
-      const st = isSystem
-        ? '<span class="badge partial">系统日</span>'
-        : dateOk
-          ? '<span class="badge ok">成功</span>'
-          : '<span class="badge fail">失败</span>';
+      return { headers, rows, rowTags, gapMap, stickyMap };
+    }
 
-      return `<section class="sub-card">
-        <h3>日期 OCR ${st}</h3>
-        <div class="date-result">
-          <div class="date-value">${baseDate}</div>
-          <div class="date-meta">来源：${source}${reasonLabel ? ` · ${reasonLabel}` : ''}</div>
-          ${reason && reasonLabel !== reason ? `<div class="date-meta" style="opacity:.75;">码：${reason}</div>` : ''}
-          ${message && (!dateOk || isSystem) ? `<div class="date-meta" style="color:var(--err);">${message}</div>` : ''}
-          ${raw ? `<div class="date-meta">原文：${raw}</div>` : ''}
-        </div>
-        ${bestUrl ? `<div class="imgs">${imgCard(bestUrl, 'date_best.jpg')}</div>` : ''}
-      </section>`;
+    function cropFallbackNote(ctx) {
+      if (!ctx || !ctx.table_crop_fallback) return '';
+      const msg = String(
+        ctx.table_crop_fallback_message
+        || ctx.table_crop_fallback_reason
+        || '表格区域定位失败，已回退原图'
+      ).trim();
+      return `<p class="gap-legend crop-fb-note" style="color:var(--warn);margin:8px 0 0;">${escHtml(msg)}</p>`;
+    }
+
+    function sideFailMessage(ctx) {
+      if (!ctx) return '';
+      return String(
+        ctx.table_crop_fallback_message
+        || ctx.message
+        || ctx.table_crop_fallback_reason
+        || ''
+      ).trim();
     }
 
     function renderTableOcrCard(ctx, storePrefix) {
       if (!ctx) return '';
       const cands = ctx.candidates || [];
+      const view = pickTableView(ctx);
       sideFinalStore[storePrefix] = {
-        headers: ctx.headers || [],
-        rows: ctx.rows || [],
-        row_tags: ctx.row_tags || [],
-        gap_fill_map: ctx.gap_fill_map || [],
+        headers: view.headers,
+        rows: view.rows,
+        row_tags: view.rowTags,
+        gap_fill_map: view.gapMap,
         gap_filled: Number(ctx.gap_filled || 0) || 0,
+        sticky_map: view.stickyMap,
+        sticky_filled: Number(ctx.sticky_filled || 0) || 0,
       };
+      const dimmed = ctx.table_crop_fallback_reason === 'dimmed_modal';
       const st = ctx.ok
         ? '<span class="badge ok">合格</span>'
-        : '<span class="badge fail">未达下限</span>';
+        : (dimmed
+          ? '<span class="badge fail">蒙板压暗</span>'
+          : '<span class="badge fail">未达下限</span>');
+      const fbBadge = ctx.table_crop_fallback
+        ? (dimmed
+          ? '<span class="badge" style="background:rgba(248,81,73,0.18);color:var(--err);">弹窗蒙板</span>'
+          : '<span class="badge" style="background:rgba(230,192,123,0.18);color:var(--warn);">表格区域告警</span>')
+        : '';
       const exp = ctx.expected_cells != null ? ctx.expected_cells : '-';
       const gapN = Number(ctx.gap_filled || 0) || 0;
-      const dateSrc = String(ctx.date_source || '');
-      const dateFailed = dateSrc !== 'system' && dateSrc !== 'ocr' && (
-        !!(ctx.date_ocr && ctx.date_ocr.ok === false)
-        || dateSrc === 'failed'
-        || String(ctx.reason || '').startsWith('date')
-      );
-      const gapNote = gapN > 0
-        ? `<p class="gap-legend"><span class="swatch"></span>同伴补录 ${gapN} 格（高亮 · 悬停查看来源候选）；胜出原值不覆盖</p>`
-        : '';
+      const stickyN = Number(ctx.sticky_filled || 0) || 0;
+      const notes = [];
+      if (gapN > 0) {
+        notes.push(`<p class="gap-legend"><span class="swatch"></span>同伴补录 ${gapN} 格（高亮 · 悬停查看来源候选）；胜出原值不覆盖</p>`);
+      }
+      if (stickyN > 0) {
+        notes.push(`<p class="gap-legend"><span class="swatch" style="background:#388bfd;box-shadow:inset 0 0 0 1px rgba(56,139,253,0.5);"></span>粘连业务处理 ${stickyN} 格（蓝底 · 悬停查看拆分/重识）</p>`);
+      }
+      const bestCap = dimmed
+        ? '表格区域（弹窗蒙板压暗，本轮未识别）'
+        : (ctx.table_crop_fallback
+          ? '最终表格图 best_table（自动定位失败）'
+          : '最终胜出表格原图 best_table');
+      const failMsg = sideFailMessage(ctx);
+      const msgHtml = failMsg
+        ? `<p style="color:${ctx.table_crop_fallback && ctx.ok ? 'var(--warn)' : 'var(--err)'};font-size:0.88rem;margin:10px 0 0;">${escHtml(failMsg)}</p>`
+        : cropFallbackNote(ctx);
       return `<section class="sub-card">
-        <h3>表格 OCR ${st}
+        <h3>表格 OCR ${st}${fbBadge}
           <span style="color:var(--muted);font-size:0.82rem;font-weight:500;">
-            采纳/识别 ${ctx.point_count ?? 0}/${ctx.ocr_filled ?? '-'} · 预计 ${exp}${gapN > 0 ? ` · 补录 ${gapN}` : ''}
+            采纳/识别 ${ctx.point_count ?? 0}/${ctx.ocr_filled ?? '-'} · 预计 ${exp}${gapN > 0 ? ` · 补录 ${gapN}` : ''}${stickyN > 0 ? ` · 粘连 ${stickyN}` : ''}
           </span>
         </h3>
-        <div class="imgs">${imgCard(ctx.best_table_url, '最终胜出表格原图 best_table')}</div>
+        <div class="imgs">${imgCard(ctx.best_table_url, bestCap)}</div>
         <div class="links" style="margin-top:10px;">
           ${ctx.excel_url ? `<a href="${ctx.excel_url}" target="_blank">下载 Excel</a>` : ''}
           ${copyPathBtn(ctx.best_table_path, '复制 best_table 路径')}
         </div>
-        ${ctx.message && !dateFailed ? `<p style="color:var(--err);font-size:0.88rem;margin:10px 0 0;">${ctx.message}</p>` : ''}
-        ${renderTable(ctx.headers, ctx.rows || [], ctx.row_tags, ctx.gap_fill_map)}
-        ${gapNote}
+        ${msgHtml}
+        ${renderTable(view.headers, view.rows, view.rowTags, view.gapMap, view.stickyMap)}
+        ${notes.join('')}
         ${renderCandidates(cands, storePrefix)}
       </section>`;
     }
@@ -1246,28 +1454,33 @@
       if (!side) {
         return `<div class="side-col"><section class="card"><p class="side-title">${name}</p><p style="color:var(--muted);">无数据</p></section></div>`;
       }
+      const dimmed = side.table_crop_fallback_reason === 'dimmed_modal';
       const st = side.ok
         ? '<span class="badge ok">合格</span>'
-        : '<span class="badge fail">未达下限</span>';
+        : (dimmed
+          ? '<span class="badge fail">蒙板压暗</span>'
+          : '<span class="badge fail">未达下限</span>');
       const titleExtra = side.title ? ` · ${side.title}` : '';
+      const sideMsg = sideFailMessage(side);
       return `<div class="side-col">
         <section class="card">
           <p class="side-title">${name}${titleExtra} ${st}
             <span class="muted">采纳/识别 ${side.point_count ?? 0}/${side.ocr_filled ?? '-'}</span>
           </p>
-          <div class="imgs hero">${imgCard(side.image_url || side.monitor_url, `${name}有效区域（识别用）`)}</div>
+          ${sideMsg && !side.ok
+            ? `<p style="color:var(--err);font-size:0.88rem;margin:6px 0 0;">${escHtml(sideMsg)}</p>`
+            : ''}
+          <div class="imgs hero">${imgCard(side.image_url || side.monitor_url, `${name}抓拍图（识别用）`)}</div>
           <div class="links" style="margin-top:10px;">
             ${copyPathBtn(side.image_path, '复制切分图路径')}
           </div>
         </section>
-        ${renderDateOcrCard(side)}
         ${renderTableOcrCard(side, storePrefix)}
       </div>`;
     }
 
     function renderSingleStack(run) {
       return `<div class="side-col">
-        ${renderDateOcrCard(run)}
         ${renderTableOcrCard(run, 'S')}
       </div>`;
     }
@@ -1308,39 +1521,31 @@
               return `OCR ${fmt(ocr)} / 总 ${fmt(total)}`;
             })()}</span>
             <span>写 PI：${pi.skipped ? '跳过' : `${pi.written ?? 0}/${pi.total ?? 0}`}</span>
-            ${run.message ? `<span style="color:var(--err)">${run.message}</span>` : ''}
+            ${run.message ? `<span style="color:var(--err)">${escHtml(run.message)}</span>` : ''}
+            ${reocrBtn(run)}
           </div>
-          <section class="card">
-            <h2>总画面</h2>
+          ${renderPiWriteSection(pi)}
+        `;
+
+        if (run.mode === 'dual') {
+          const uploadName = (run.display_name || run.upload_name || '').trim();
+          body += `${uploadName || run.excel_url ? `<div class="links" style="margin:0 0 12px;">
+            ${uploadName ? `<span class="sub" style="color:var(--muted);word-break:break-all;">上传文件：<strong style="color:var(--text)">${uploadName.replace(/</g,'&lt;')}</strong></span>` : ''}
+            ${run.excel_url ? `<a href="${run.excel_url}" target="_blank">下载 Excel</a>` : ''}
+          </div>` : ''}
+          <div class="side-grid">
+            ${renderSideColumn(run.left, '左侧', 'L')}
+            ${renderSideColumn(run.right, '右侧', 'R')}
+          </div>`;
+        } else {
+          body += `<section class="card">
+            <h2>画面</h2>
             ${(() => {
               const name = (run.display_name || run.upload_name || '').trim();
               if (!name) return '';
               return `<div class="sub" style="margin:0 0 10px;color:var(--muted);word-break:break-all;">上传文件：<strong style="color:var(--text)">${name.replace(/</g,'&lt;')}</strong></div>`;
             })()}
             ${(() => {
-              const left = run.left || {};
-              const right = run.right || {};
-              const leftSrc = run.left_capture_url || left.source_url || '';
-              const rightSrc = run.right_capture_url || right.source_url || '';
-              // 双摄总画面只放一行左右原图；有效区域在下方左右栏展示
-              const isDouble = run.capture_mode === 'double_camera'
-                || run.mode === 'double'
-                || !!(run.left_capture_url || run.right_capture_url);
-              if (isDouble && (leftSrc || rightSrc)) {
-                const lTag = left.tag || 'L';
-                const rTag = right.tag || 'R';
-                const cell = (url, cap) => imgCard(url, cap) || `<div class="img-card"><div class="cap">${cap}（无）</div></div>`;
-                return `<div class="imgs hero">
-                  ${cell(leftSrc, `左 · 原图（${lTag}）`)}
-                  ${cell(rightSrc, `右 · 原图（${rTag}）`)}
-                </div>
-                <div class="links" style="margin-top:10px;">
-                  ${copyPathBtn(run.left_capture_path || left.source_path, '复制左原图路径')}
-                  ${copyPathBtn(run.right_capture_path || right.source_path, '复制右原图路径')}
-                  ${run.excel_url ? `<a href="${run.excel_url}" target="_blank">下载 Excel</a>` : ''}
-                </div>`;
-              }
-              // 单图兼容
               const monUrl = resolveMonitorUrl(run);
               return `<div class="imgs hero">
                 ${imgCard(run.source_url || run.capture_url, '源图（整帧）')}
@@ -1356,15 +1561,7 @@
               </div>`;
             })()}
           </section>
-        `;
-
-        if (run.mode === 'dual') {
-          body += `<div class="side-grid">
-            ${renderSideColumn(run.left, '左侧', 'L')}
-            ${renderSideColumn(run.right, '右侧', 'R')}
-          </div>`;
-        } else {
-          body += renderSingleStack(run);
+          ${renderSingleStack(run)}`;
         }
 
         main.innerHTML = body;

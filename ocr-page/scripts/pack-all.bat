@@ -27,7 +27,8 @@ if not exist "python\python.exe" (
   exit /b 1
 )
 
-set "OUT=%cd%\..\gx-capture-demo-field.zip"
+for /f %%i in ('powershell -NoProfile -Command "Get-Date -Format yyyyMMdd-HHmm"') do set "TS=%%i"
+set "OUT=%cd%\..\gx-ocr-all-%TS%.zip"
 if exist "%OUT%" del /f /q "%OUT%"
 
 echo 正在打包全量离线包（含 python\）...

@@ -23,6 +23,9 @@ logger = logging.getLogger(__name__)
 
 RUNS_DIR = DATA_DIR / "runs"
 
+# 履历 / 产物日目录名：YYYYMMDD（与 captures 一致）
+_DAY_DIR_RE_LEN = 8
+
 
 def _web_url(path: Optional[str | Path]) -> str:
     """把项目内绝对/相对路径转成可挂载的 URL；非项目内返回空。"""
@@ -41,8 +44,96 @@ def _now_stamp() -> str:
     return datetime.now().strftime("%Y%m%d_%H%M%S_%f")[:-3]
 
 
+def _day_from_stamp(stamp: str) -> Optional[str]:
+    """从 YYYYMMDD_HHMMSS_mmm 或 run_id（mode_YYYYMMDD_…）取日目录名。"""
+    s = str(stamp or "").strip()
+    if not s:
+        return None
+    for mode in ("single", "dual", "double"):
+        prefix = f"{mode}_"
+        if s.startswith(prefix):
+            s = s[len(prefix) :]
+            break
+    day = s[:_DAY_DIR_RE_LEN]
+    if len(day) == _DAY_DIR_RE_LEN and day.isdigit():
+        return day
+    return None
+
+
+def _runs_day_dir(run_id: str, when: Optional[datetime] = None) -> Path:
+    """履历按日分区目录：data/runs/YYYYMMDD/。"""
+    day = _day_from_stamp(run_id) or (when or datetime.now()).strftime("%Y%m%d")
+    out = RUNS_DIR / day
+    out.mkdir(parents=True, exist_ok=True)
+    return out
+
+
+def _normalize_day_dir(day: Optional[str]) -> Optional[str]:
+    """前端 date 输入 YYYY-MM-DD → YYYYMMDD；非法则 None。"""
+    if not day:
+        return None
+    compact = str(day).strip().replace("-", "")
+    if len(compact) == _DAY_DIR_RE_LEN and compact.isdigit():
+        return compact
+    return None
+
+
+def _iter_run_json_files(day: Optional[str] = None) -> List[Path]:
+    """扫描履历 json：新布局 runs/YYYYMMDD/*.json + 旧布局 runs/*.json。
+
+    指定 day 时只扫对应日目录（及扁平旧文件中 stamp 落在该日的），避免全量读取。
+    """
+    RUNS_DIR.mkdir(parents=True, exist_ok=True)
+    files: List[Path] = []
+    seen: set[str] = set()
+    day_compact = _normalize_day_dir(day)
+
+    def _add(f: Path) -> None:
+        if not f.is_file():
+            return
+        key = f.name.lower()
+        if key in seen:
+            return
+        seen.add(key)
+        files.append(f)
+
+    if day_compact:
+        day_dir = RUNS_DIR / day_compact
+        if day_dir.is_dir():
+            for f in day_dir.glob("*.json"):
+                _add(f)
+        # 兼容尚未迁入日目录的旧扁平文件
+        for f in RUNS_DIR.glob("*.json"):
+            if _day_from_stamp(f.stem) == day_compact:
+                _add(f)
+        return files
+
+    for f in RUNS_DIR.glob("*/*.json"):
+        _add(f)
+    for f in RUNS_DIR.glob("*.json"):
+        _add(f)
+    return files
+
+
+def _find_run_json_path(run_id: str) -> Optional[Path]:
+    """定位履历文件：优先日目录，其次根目录扁平旧布局。"""
+    day = _day_from_stamp(run_id)
+    candidates: List[Path] = []
+    if day:
+        candidates.append(RUNS_DIR / day / f"{run_id}.json")
+    candidates.append(RUNS_DIR / f"{run_id}.json")
+    for p in candidates:
+        if p.is_file():
+            return p
+    # 兜底：日目录名与 stamp 前缀不一致时（极少）扫一遍
+    for f in RUNS_DIR.glob(f"*/{run_id}.json"):
+        if f.is_file():
+            return f
+    return None
+
+
 def _artifacts_bucket_from_dir(artifacts_dir: Optional[str | Path]) -> Optional[str]:
-    """从 ocr_runs/<bucket>/<stamp> 解析 bucket（single|dual|double）。"""
+    """从 ocr_runs[/YYYYMMDD]/<bucket>/<stamp> 解析 bucket（single|dual|double）。"""
     if not artifacts_dir:
         return None
     try:
@@ -52,6 +143,31 @@ def _artifacts_bucket_from_dir(artifacts_dir: Optional[str | Path]) -> Optional[
     if parent in ("single", "dual", "double"):
         return parent
     return None
+
+
+def _ocr_run_json_candidates(run_id: str) -> List[Path]:
+    """ocr_runs 内 run.json 候选路径（新：日/bucket/stamp；旧：bucket/stamp）。"""
+    root = resolve_ocr_artifacts_root()
+    stamp = run_id
+    buckets: Tuple[str, ...] = ("single", "dual", "double")
+    for mode in buckets:
+        prefix = f"{mode}_"
+        if run_id.startswith(prefix):
+            stamp = run_id[len(prefix) :]
+            buckets = (mode,)
+            # 旧双摄曾落在 dual/；新双摄在 double/
+            if mode == "dual":
+                buckets = ("dual", "double")
+            elif mode == "double":
+                buckets = ("double", "dual")
+            break
+    day = _day_from_stamp(stamp)
+    out: List[Path] = []
+    for mode in buckets:
+        if day:
+            out.append(root / day / mode / stamp / "run.json")
+        out.append(root / mode / stamp / "run.json")
+    return out
 
 
 def _run_id(mode: str, artifacts_dir: Optional[str] = None) -> str:
@@ -93,11 +209,58 @@ def _candidates_for_ui(ocr: Optional[Dict[str, Any]]) -> List[Dict[str, Any]]:
                     [str(c or "") for c in row]
                     for row in (raw.get("gap_fill_map") or [])
                 ],
+                "sticky_filled": int(raw.get("sticky_filled") or 0),
+                "sticky_map": [
+                    [str(c or "") for c in row]
+                    for row in (raw.get("sticky_map") or [])
+                ],
                 "image_path": img,
                 "image_url": _web_url(img),
             }
         )
     return out
+
+
+def _normalize_pi_items(raw: Any) -> List[Dict[str, Any]]:
+    """压缩写 PI 逐点明细，只保留详情/调试页需要的字段。"""
+    if not isinstance(raw, list):
+        return []
+    out: List[Dict[str, Any]] = []
+    for it in raw:
+        if not isinstance(it, dict):
+            continue
+        out.append(
+            {
+                "time_label": it.get("time_label"),
+                "tag": it.get("tag"),
+                "value": it.get("value"),
+                "timestamp": it.get("timestamp"),
+                "row_index": it.get("row_index"),
+                "pi_code": it.get("pi_code"),
+                "ok": bool(it.get("ok")),
+                "skipped": bool(it.get("skipped")),
+                "reason": it.get("reason"),
+                "message": it.get("message"),
+            }
+        )
+    return out
+
+
+def _pi_fail_summary(items: List[Dict[str, Any]], *, written: int = 0, total: int = 0) -> str:
+    """从逐点结果生成简短失败摘要（供履历 message 展示）。"""
+    fails = [it for it in items if not it.get("ok") and not it.get("skipped")]
+    if not fails:
+        return f"写 PI 未全部成功：{written}/{total}"
+    first = fails[0]
+    why = first.get("message") or (
+        f"code={first.get('pi_code')}" if first.get("pi_code") is not None else ""
+    )
+    tip = f"写 PI 未全部成功：{written}/{total}"
+    if why:
+        tip += f" · {why}"
+    if len(fails) > 1:
+        tip += f"（另有 {len(fails) - 1} 点失败）"
+    return tip
 
 
 def _resolve_monitor_image(
@@ -374,10 +537,12 @@ def _humanize_date_reason(reason: Any, date_source: Any = None) -> str:
     """把 reason 码转成简短中文说明。"""
     r = str(reason or "").strip()
     src = str(date_source or "").strip()
-    if r == "date_ocr_disabled" and src == "system":
-        return "日期 OCR 已关闭，已用系统日"
+    if r in ("system_date", "date_ocr_disabled") and src == "system":
+        return "使用电脑系统日（不识别画面日期）"
+    if r in ("system_date", "date_ocr_disabled"):
+        return "使用电脑系统日"
     if src == "system":
-        return "日期 OCR 失败，已用系统日"
+        return "使用电脑系统日"
     if not r and src == "ocr":
         return "OCR 识别成功"
     if r.startswith("full_ymd_search_band") or r.startswith("full_ymd_label_same_row"):
@@ -569,6 +734,15 @@ def _side_summary(side: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
     gap_filled = int(side.get("gap_filled") or ocr.get("gap_filled") or 0)
     if gap_filled <= 0 and gap_fill_map:
         gap_filled = sum(1 for row in gap_fill_map for c in row if c and str(c).strip())
+    sticky_map = [
+        [str(c or "") for c in row]
+        for row in (side.get("sticky_map") or ocr.get("sticky_map") or [])
+    ]
+    sticky_filled = int(side.get("sticky_filled") or ocr.get("sticky_filled") or 0)
+    if sticky_filled <= 0 and sticky_map:
+        sticky_filled = sum(
+            1 for row in sticky_map for c in row if c and str(c).strip()
+        )
     expected_cells = int(
         side.get("expected_cells")
         or ocr.get("expected_cells")
@@ -601,6 +775,21 @@ def _side_summary(side: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
         else:
             monitor_path = work_path
 
+    crop_fb = bool(
+        side.get("table_crop_fallback")
+        if side.get("table_crop_fallback") is not None
+        else ocr.get("table_crop_fallback")
+    )
+    crop_fb_reason = str(
+        side.get("table_crop_fallback_reason")
+        or ocr.get("table_crop_fallback_reason")
+        or ""
+    )
+    crop_fb_msg = str(
+        side.get("table_crop_fallback_message")
+        or ocr.get("table_crop_fallback_message")
+        or ""
+    )
     return {
         "ok": bool(side.get("ok")),
         "id": side.get("id"),
@@ -614,9 +803,14 @@ def _side_summary(side: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
         "expected_cells": expected_cells,
         "gap_filled": gap_filled,
         "gap_fill_map": gap_fill_map,
+        "sticky_filled": sticky_filled,
+        "sticky_map": sticky_map,
         "reason": side.get("reason"),
         "message": side.get("message"),
         "quality": side.get("quality"),
+        "table_crop_fallback": crop_fb,
+        "table_crop_fallback_reason": crop_fb_reason or None,
+        "table_crop_fallback_message": crop_fb_msg or None,
         "source_path": source_path,
         "source_url": _web_url(source_path),
         "image_path": work_path,
@@ -674,6 +868,24 @@ def build_run_record(
 
     quality = result.get("quality") or ocr.get("quality") or {}
     pi = result.get("pi") or {}
+    pi_items = _normalize_pi_items(pi.get("items"))
+    # 写 PI 部分失败时用逐点摘要覆盖笼统 message，便于列表/详情一眼看到原因
+    run_reason = result.get("reason") or quality.get("reason")
+    run_message = result.get("message") or quality.get("message")
+    if (
+        pi_items
+        and pi.get("ok") is False
+        and not pi.get("skipped")
+        and (run_reason == "pi_write_failed" or not run_message)
+    ):
+        run_message = _pi_fail_summary(
+            pi_items,
+            written=int(pi.get("written") or 0),
+            total=int(pi.get("total") or 0),
+        )
+        run_reason = run_reason or "pi_write_failed"
+        if not pi.get("message"):
+            pi = {**pi, "message": run_message}
     # 本机上传原始文件名（展示用）；落盘预览仍用 source_copy / 00_source.*
     upload_name = str(
         result.get("upload_name")
@@ -704,8 +916,8 @@ def build_run_record(
         "started_at": started_at or finished,
         "finished_at": finished,
         "ok": bool(result.get("ok")),
-        "reason": result.get("reason") or quality.get("reason"),
-        "message": result.get("message") or quality.get("message"),
+        "reason": run_reason,
+        "message": run_message,
         "point_count": int(
             result.get("point_count")
             or quality.get("point_count")
@@ -734,10 +946,14 @@ def build_run_record(
             "written": pi.get("written", 0),
             "total": pi.get("total", 0),
             "skipped": bool(pi.get("skipped")),
+            "skipped_max": pi.get("skipped_max"),
+            "value_max": pi.get("value_max"),
             "reason": pi.get("reason"),
             "message": pi.get("message"),
             "sides_written": pi.get("sides_written"),
             "sides_skipped": pi.get("sides_skipped"),
+            # 逐点写入明细（成功/失败/跳过），供详情页与调试页核对
+            "items": pi_items,
         },
         "quality": quality,
         "timing": result.get("timing") or {},
@@ -806,6 +1022,20 @@ def build_run_record(
                 for c in row
                 if c and str(c).strip()
             )
+        record["sticky_map"] = [
+            [str(c or "") for c in row]
+            for row in (ocr.get("sticky_map") or result.get("sticky_map") or [])
+        ]
+        record["sticky_filled"] = int(
+            ocr.get("sticky_filled") or result.get("sticky_filled") or 0
+        )
+        if record["sticky_filled"] <= 0 and record["sticky_map"]:
+            record["sticky_filled"] = sum(
+                1
+                for row in record["sticky_map"]
+                for c in row
+                if c and str(c).strip()
+            )
         record["points"] = list(ocr.get("points") or result.get("points") or [])
         record["best_table_path"] = best
         record["best_table_url"] = _web_url(best)
@@ -820,6 +1050,19 @@ def build_run_record(
         record["expected_cells"] = get_ocr_expected_cells(
             get_config(), headers=headers, rows=rows
         )
+        record["table_crop_fallback"] = bool(
+            ocr.get("table_crop_fallback") or result.get("table_crop_fallback")
+        )
+        record["table_crop_fallback_reason"] = (
+            ocr.get("table_crop_fallback_reason")
+            or result.get("table_crop_fallback_reason")
+            or None
+        )
+        record["table_crop_fallback_message"] = (
+            ocr.get("table_crop_fallback_message")
+            or result.get("table_crop_fallback_message")
+            or None
+        )
         record.update(
             _date_fields_for_ui(
                 artifacts_dir=artifacts_dir,
@@ -833,15 +1076,24 @@ def build_run_record(
 
 
 def save_run_record(record: Dict[str, Any]) -> Dict[str, Any]:
-    """写入 runs/{id}.json，若有 artifacts 目录则同步一份 run.json。"""
+    """写入 runs/YYYYMMDD/{id}.json，若有 artifacts 目录则同步一份 run.json。"""
     RUNS_DIR.mkdir(parents=True, exist_ok=True)
     run_id = str(record.get("id") or _run_id(str(record.get("mode") or "single")))
     record["id"] = run_id
-    text = json.dumps(record, ensure_ascii=False, indent=2)
-    index_path = RUNS_DIR / f"{run_id}.json"
-    index_path.write_text(text, encoding="utf-8")
+    day_dir = _runs_day_dir(run_id)
+    index_path = day_dir / f"{run_id}.json"
+    # 先写路径字段再序列化，保证落盘内容含 record_path
     record["record_path"] = str(index_path)
     record["record_url"] = _web_url(index_path)
+    text = json.dumps(record, ensure_ascii=False, indent=2)
+    index_path.write_text(text, encoding="utf-8")
+    # 清理旧扁平布局同名文件，避免 list 重复
+    legacy = RUNS_DIR / f"{run_id}.json"
+    if legacy.is_file() and legacy.resolve() != index_path.resolve():
+        try:
+            legacy.unlink()
+        except OSError:
+            logger.warning("无法删除旧履历文件: %s", legacy)
 
     arts = record.get("artifacts_dir") or ""
     if arts:
@@ -1010,13 +1262,20 @@ def list_runs(
     pi: Optional[str] = None,
     order: str = "desc",
 ) -> Dict[str, Any]:
-    """扫描 runs/*.json。默认按完成时间倒序；order=asc 为时间线升序（旧→新）。
+    """扫描 runs[/YYYYMMDD]/*.json。默认按完成时间倒序；order=asc 为时间线升序（旧→新）。
 
-    result: ok|partial_ok|capture_fail|ocr_fail|pi_fail|pending_pi
+    result: any_ok|ok|partial_ok|capture_fail|ocr_fail|pi_fail|pending_pi
+      any_ok = ok（两侧/整次成功）+ partial_ok（一侧成功）
     pi: ok|unwritten|fail（unwritten 仅未写入；fail 仅写失败；pending=未写入+写失败）
+    day: 指定时只扫对应日目录（与 captures 一致的 YYYYMMDD）
     """
     RUNS_DIR.mkdir(parents=True, exist_ok=True)
-    files = sorted(RUNS_DIR.glob("*.json"), key=lambda p: p.stat().st_mtime, reverse=True)
+    day_compact = _normalize_day_dir(day)
+    files = sorted(
+        _iter_run_json_files(day_compact),
+        key=lambda p: p.stat().st_mtime,
+        reverse=True,
+    )
     pi_filter = (pi or "").strip().lower() or None
     result_filter = (result or "").strip().lower() or None
     items: List[Dict[str, Any]] = []
@@ -1028,18 +1287,27 @@ def list_runs(
             continue
         if mode and str(data.get("mode") or "") != mode:
             continue
-        if day:
+        # 日目录已按文件夹收窄；再按 finished_at 兜底（跨日 stamp 偶发）
+        if day_compact:
             finished = str(data.get("finished_at") or data.get("started_at") or "")
-            day_compact = day.replace("-", "")
-            if day_compact not in finished.replace("-", "").replace(" ", "").replace(":", ""):
-                if not finished.startswith(day):
+            finished_compact = (
+                finished.replace("-", "").replace(" ", "").replace(":", "")
+            )
+            if day_compact not in finished_compact and not finished.startswith(
+                f"{day_compact[:4]}-{day_compact[4:6]}-{day_compact[6:8]}"
+            ):
+                # 无时间字段时信任文件名/日目录
+                if finished.strip():
                     continue
         st = _status_summary(data)
         rs = st["result_status"]
         ps = st["pi_status"]
 
         if result_filter:
-            if rs != result_filter:
+            if result_filter == "any_ok":
+                if rs not in ("ok", "partial_ok"):
+                    continue
+            elif rs != result_filter:
                 continue
         elif ok is not None:
             # 兼容旧 ok 布尔：成功=三步完成；失败=其余
@@ -1156,17 +1424,22 @@ def apply_pi_write_result(
     write = write or {}
     write_ok = bool(write.get("ok"))
     skipped_max = int(write.get("skipped_max") or 0)
+    written = int(write.get("written") or 0)
+    total = int(write.get("total") or 0)
+    items = _normalize_pi_items(write.get("items"))
+    fail_msg = None if write_ok else _pi_fail_summary(items, written=written, total=total)
     data["pi"] = {
         "ok": write_ok,
-        "written": int(write.get("written") or 0),
-        "total": int(write.get("total") or 0),
+        "written": written,
+        "total": total,
         "skipped": False,
         "skipped_max": skipped_max,
         "value_max": write.get("value_max"),
         "reason": None if write_ok else "pi_write_failed",
-        "message": None if write_ok else "写 PI 未全部成功",
+        "message": fail_msg,
         "sides_written": write.get("sides_written"),
         "sides_skipped": write.get("sides_skipped"),
+        "items": items,
         "rewritten_at": now,
     }
     if write_ok and skipped_max > 0:
@@ -1196,10 +1469,11 @@ def apply_pi_write_result(
         "id": run_id,
         "written": write.get("written"),
         "total": write.get("total"),
+        "items": items,
         "pi": data["pi"],
         "pi_status": classify_pi_status(data),
         "result_status": classify_result_status(data),
-        "message": None if write_ok else "写 PI 未全部成功",
+        "message": None if write_ok else fail_msg,
     }
 
 
@@ -1275,27 +1549,12 @@ def rewrite_pending_pi(
 
 
 def get_run(run_id: str) -> Optional[Dict[str, Any]]:
-    path = RUNS_DIR / f"{run_id}.json"
+    path = _find_run_json_path(run_id)
     data: Optional[Dict[str, Any]] = None
-    if not path.is_file():
+    if path is None:
         # 兼容：从 ocr_runs 里找 run.json
         # id 形如 single_/dual_/double_ + YYYYMMDD_HHMMSS_mmm
-        root = resolve_ocr_artifacts_root()
-        stamp = run_id
-        buckets: Tuple[str, ...] = ("single", "dual", "double")
-        for mode in buckets:
-            prefix = f"{mode}_"
-            if run_id.startswith(prefix):
-                stamp = run_id[len(prefix) :]
-                buckets = (mode,)
-                # 旧双摄曾落在 dual/；新双摄在 double/
-                if mode == "dual":
-                    buckets = ("dual", "double")
-                elif mode == "double":
-                    buckets = ("double", "dual")
-                break
-        for mode in buckets:
-            cand = root / mode / stamp / "run.json"
+        for cand in _ocr_run_json_candidates(run_id):
             if cand.is_file():
                 try:
                     data = json.loads(cand.read_text(encoding="utf-8"))

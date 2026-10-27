@@ -81,24 +81,73 @@ def parse_crop(raw: Optional[str]) -> Optional[Tuple[float, float, float, float]
     return parts[0], parts[1], parts[2], parts[3]
 
 
-def get_auto_monitor(cfg: Optional[Dict[str, Any]] = None) -> bool:
+def _parse_side_crop_raw(raw: Any) -> Optional[Tuple[float, float, float, float]]:
+    """空 / 未配 → None；非法格式抛 ValueError。"""
+    if raw is None:
+        return None
+    text = str(raw).strip()
+    if not text:
+        return None
+    return parse_crop(text)
+
+
+def get_camera_table_search(
+    side: str,
+    cfg: Optional[Dict[str, Any]] = None,
+) -> Optional[Tuple[float, float, float, float]]:
     """
-    是否先裁显示器有效区域再 OCR。
-    只认 capture.auto_monitor；缺省 false（与 config.yaml 一致，不裁则用整图）。
-    兼容旧键：capture.double / dual / single 下的 auto_monitor。
+    表格 auto 先验搜索窗：cameras.{left|right}.table_search（x0,y0,x1,y1 相对整图）。
+
+    先裁该窗再在窗内 table_auto。空 / 未配置 → None，整图 auto。
     """
     cfg = cfg or get_config()
-    cap = cfg.get("capture") or {}
-    if not isinstance(cap, dict):
-        return False
-    if "auto_monitor" in cap:
-        return bool(cap.get("auto_monitor"))
-    for key in ("double", "dual", "single"):
-        block = cap.get(key) or {}
-        if isinstance(block, dict) and "auto_monitor" in block:
-            return bool(block.get("auto_monitor"))
-    return False
+    side_key = str(side or "").strip().lower()
+    if side_key not in ("left", "right"):
+        return None
+    cams = cfg.get("cameras") or {}
+    cam = cams.get(side_key) if isinstance(cams, dict) else None
+    if isinstance(cam, dict) and "table_search" in cam:
+        return _parse_side_crop_raw(cam.get("table_search"))
+    return None
 
+
+def get_camera_modal_dim(
+    side: str,
+    cfg: Optional[Dict[str, Any]] = None,
+) -> Dict[str, float]:
+    """
+    弹窗蒙板判定门槛：cameras.{left|right}.modal_dim。
+
+    可选键 mean_max / content_max / grey_min；未配则空 dict，引擎用侧别默认。
+    """
+    cfg = cfg or get_config()
+    side_key = str(side or "").strip().lower()
+    if side_key not in ("left", "right"):
+        return {}
+    cams = cfg.get("cameras") or {}
+    cam = cams.get(side_key) if isinstance(cams, dict) else None
+    if not isinstance(cam, dict):
+        return {}
+    raw = cam.get("modal_dim")
+    if not isinstance(raw, dict):
+        return {}
+    out: Dict[str, float] = {}
+    for key in ("mean_max", "content_max", "grey_min"):
+        if key not in raw or raw[key] is None:
+            continue
+        try:
+            out[key] = float(raw[key])
+        except (TypeError, ValueError):
+            continue
+    return out
+
+
+def get_capture_table_search(
+    side: str,
+    cfg: Optional[Dict[str, Any]] = None,
+) -> Optional[Tuple[float, float, float, float]]:
+    """兼容旧名：等同 get_camera_table_search。"""
+    return get_camera_table_search(side, cfg)
 
 def get_single_cfg(cfg: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """capture.single（兼容旧 capture.tag/crop、ocr.crop、pi.tag）。"""
@@ -374,9 +423,7 @@ def get_ocr_min_points(cfg: Optional[Dict[str, Any]] = None) -> int:
 
 def get_ocr_auto_enable(cfg: Optional[Dict[str, Any]] = None) -> bool:
     """
-    是否允许 auto 裁剪回退。
-    true（默认）：先跑 fixed；表头不可用或列数不足时再跑 auto。
-    false：只跑 fixed，不再跑 auto。
+    兼容旧配置。本分支表格 OCR 只走自动定位，该开关不再决定是否跑固定框。
     """
     cfg = cfg or get_config()
     return bool((cfg.get("ocr") or {}).get("auto_enable", True))
@@ -438,12 +485,12 @@ def get_ocr_max_width(cfg: Optional[Dict[str, Any]] = None) -> Optional[int]:
 
 
 def get_ocr_scale(cfg: Optional[Dict[str, Any]] = None) -> float:
-    """表格 OCR 放大倍数（默认 2.0，偏速度）。"""
+    """表格 OCR 参考放大倍数（默认 1.35；引擎按表宽自适应，大图少放）。"""
     cfg = cfg or get_config()
     try:
-        return float((cfg.get("ocr") or {}).get("scale", 2.0))
+        return float((cfg.get("ocr") or {}).get("scale", 1.35))
     except (TypeError, ValueError):
-        return 2.0
+        return 1.35
 
 
 def get_ocr_onnx_threads(cfg: Optional[Dict[str, Any]] = None) -> int:
@@ -478,12 +525,11 @@ _DEFAULT_DATE_SEARCH_BAND = (0.02, 0.02, 0.55, 0.34)
 
 def get_ocr_date_ocr_enabled(cfg: Optional[Dict[str, Any]] = None) -> bool:
     """
-    是否跑画面日期 OCR。
-    true（默认）：识别左上角业务日。
-    false：跳过日期识别，直接用本机系统日继续表格 OCR。
+    本分支不识别画面日期，始终返回 false。
+    业务日使用电脑系统日；写库日仍按 pi.pi_date_back_days 提前。
     """
-    cfg = cfg or get_config()
-    return bool((cfg.get("ocr") or {}).get("date_ocr_enabled", True))
+    del cfg
+    return False
 
 
 def get_ocr_date_fallback_system(cfg: Optional[Dict[str, Any]] = None) -> bool:
@@ -503,12 +549,8 @@ def get_ocr_date_cfg(
     side: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
-    双摄日期 OCR 配置。
-    ocr.date_ocr_enabled：是否跑日期识别（false 则直接用系统日）。
-    ocr.date_fallback_system：识别失败时是否回退系统日。
-    capture.double.{left|right}.date_crop = 搜索带（相对有效区域图）；
-    流程：搜索带直接认 YYYY-MM-DD → 否则裁「日期」右侧再认 → 否则失败。
-    （兼容读旧键 capture.dual）
+    双摄日期配置。本分支不跑画面日期 OCR，业务日固定为电脑系统日。
+    date_crop 不再使用。
     """
     del layout
     cfg = cfg or get_config()
@@ -617,19 +659,21 @@ def new_ocr_run_dir(
     cfg: Optional[Dict[str, Any]] = None,
 ) -> Path:
     """
-    新建一次 OCR 会话目录（始终落盘过程中间文件）：
-      data/ocr_runs/single/YYYYMMDD_HHMMSS_mmm/
-      data/ocr_runs/dual/YYYYMMDD_HHMMSS_mmm/          # 双屏拼缝
-      data/ocr_runs/double/YYYYMMDD_HHMMSS_mmm/        # 双摄；下含 left/ right/
+    新建一次 OCR 会话目录（始终落盘过程中间文件；按日分区，与 captures 一致）：
+      data/ocr_runs/YYYYMMDD/single/YYYYMMDD_HHMMSS_mmm/
+      data/ocr_runs/YYYYMMDD/dual/YYYYMMDD_HHMMSS_mmm/      # 双屏拼缝
+      data/ocr_runs/YYYYMMDD/double/YYYYMMDD_HHMMSS_mmm/    # 双摄；下含 left/ right/
     """
     from datetime import datetime
     import uuid
 
     m = normalize_ocr_artifacts_mode(mode)
     root = resolve_ocr_artifacts_root(cfg)
-    stamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")[:-3]
-    out = root / m / stamp
+    now = datetime.now()
+    day = now.strftime("%Y%m%d")
+    stamp = now.strftime("%Y%m%d_%H%M%S_%f")[:-3]
+    out = root / day / m / stamp
     if out.exists():
-        out = root / m / f"{stamp}_{uuid.uuid4().hex[:6]}"
+        out = root / day / m / f"{stamp}_{uuid.uuid4().hex[:6]}"
     out.mkdir(parents=True, exist_ok=True)
     return out

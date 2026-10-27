@@ -17,8 +17,8 @@ ocr.bat offline         :: 由 .venv 生成便携 python\
 ocr.bat start           :: 后台启动 http://127.0.0.1:8088/
 ocr.bat stop            :: 停止服务
 ocr.bat restart         :: 停止后重启（更新代码后用）
-ocr.bat pack            :: 轻量更新包 → ..\gx-capture-demo-update.zip
-ocr.bat pack -all       :: 全量离线包；若无 python\ 则自动 install/offline 再打包
+ocr.bat pack            :: 轻量更新包 → ..\gx-ocr-update-yyyyMMdd-HHmm.zip
+ocr.bat pack -all       :: 全量离线包 → ..\gx-ocr-all-yyyyMMdd-HHmm.zip；缺 python\ 时自动 install/offline
 ```
 
 ## 现场离线包（推荐）
@@ -38,7 +38,7 @@ ocr.bat pack -all       :: 全量离线包；若无 python\ 则自动 install/of
 **重要：不要用 Python 3.14。** OCR 库 `rapidocr-onnxruntime` 仅支持 **Python 3.10 ~ 3.12**。
 
 ```bat
-cd d:\yw\gx\gx-capture-demo
+cd d:\yw\gx\gx-ocr
 ocr.bat install
 ```
 
@@ -56,7 +56,7 @@ OCR 引擎位于 [`app/ocr_engine/`](app/ocr_engine/)（`ocr.workdir`，默认�
 ## 启动服务
 
 ```bat
-cd d:\yw\gx\gx-capture-demo
+cd d:\yw\gx\gx-ocr
 ocr.bat start
 ```
 
@@ -114,10 +114,10 @@ ocr.bat start
 - 抓图 URL：`http://{host}:{port}/ISAPI/Streaming/channels/{channel}/picture`（Digest）
 - OCR 按内置 `app/ocr_engine` 整表识别：第 1 行时间表头，其余均为数据行；**仅识别画面上可见列**
 - 写 PI 固定规则：一行数据 → 前缀_1…_N；单屏前缀 `capture.single.tag`，双屏 `capture.dual.left/right.tag`
-- 执行履历：每次流水线写入 `data/runs/{id}.json`（并同步到 `data/ocr_runs/.../run.json`）；首页列表 + `/runs/{id}` 详情
+- 执行履历：每次流水线写入 `data/runs/YYYYMMDD/{id}.json`（并同步到 `data/ocr_runs/.../run.json`）；首页列表 + `/runs/{id}` 详情
 - OCR 质量：`ocr.min_points`（默认 8）。有效点数不足视为切屏/熄屏/模糊等失败：**不写 PI**；双屏左右各自判断，合格侧照常写
 - 抓图目录 `data/captures/YYYYMMDD/`，文件名按时刻：`9-09.jpg`、`10-20.jpg`（Windows 不能用 `:`，用 `-`；同分钟重复为 `_2`…）；外层日期 + 文件名即完整时间
-- OCR 过程中间文件：`ocr.artifacts_dir`（默认 `data/ocr_runs/`，始终落盘，无开关）
+- OCR 过程中间文件：`ocr.artifacts_dir`（默认 `data/ocr_runs/YYYYMMDD/{single|dual|double}/…`，按日分区，始终落盘，无开关）
 - 定时处置：`schedule.enabled=true` 后立刻跑第一轮，本轮结束后再等 `interval_sec` 秒开始下一周期；按 `schedule.capture` / `ocr` / `pi` 截断执行；改 YAML 后下一轮前热加载
 - Excel 备份：`excel.enabled` / `excel.dir`，按日分区 `data/exports/YYYYMMDD/`（写 PI **不读** Excel）
 - 通道拍不到目标画面时改 `camera.channel`

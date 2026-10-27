@@ -1,10 +1,10 @@
 # -*- coding: utf-8 -*-
-"""双摄像头流水线（double-camera）：两路并行抓拍 → 处理 → 写 PI。
+"""双摄像头流水线：抓拍 → 表格区域识别 → 表格数据识别 → 写 PI。
 
-本分支只服务双摄：
-- cameras.left / cameras.right：各自 type（mvs|isapi）、连接参数、写 PI 的 tag 前缀
-- capture.double.left / right：table_crop（表格固定框）、date_crop（日期搜索带）
-- 流程：有效区域 → 纠偏 → 日期 → 表格识别
+- cameras.left / cameras.right：各自 type、连接、测点前缀、table_search（auto 先验窗）
+- 识别：table_search 内 auto，成败本轮即止
+- 不识别画面日期（业务日用电脑系统日）
+- 写库日 = 系统日按 pi.pi_date_back_days 提前，再与表头时刻拼接
 """
 
 from __future__ import annotations
@@ -21,16 +21,13 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from .camera_common import cam_log_prefix
 from .config import (
     ROOT_DIR,
+    get_camera_table_search,
     get_config,
-    get_auto_monitor,
-    get_ocr_date_cfg,
-    get_ocr_auto_enable,
     get_ocr_max_width,
     get_ocr_min_points,
     get_ocr_parallel_sides,
     get_ocr_fix_decimal_cfg,
     get_ocr_scale,
-    get_ocr_table_crop,
     get_ocr_onnx_threads,
     new_ocr_run_dir,
     resolve_ocr_workdir,
@@ -40,26 +37,19 @@ from .hikvision import (
     HikvisionCaptureError,
     build_camera_client_for_side,
 )
-from .monitor_crop import prepare_monitor_work_image
 from .ocr_bridge import extract_points_from_image, ocr_result_to_dict
-from .pipeline import _elapsed_ms, evaluate_ocr_point_count, write_points_to_pi
+from .pipeline import (
+    _elapsed_ms,
+    evaluate_ocr_point_count,
+    resolve_ocr_fail_fields,
+    write_points_to_pi,
+)
 
 logger = logging.getLogger(__name__)
 
 DEFAULT_CAMERA: Dict[str, Dict[str, Any]] = {
     "left": {"type": "isapi", "host": "", "tag": "GX.DEMO.OCR.L"},
     "right": {"type": "mvs", "host": "", "tag": "GX.DEMO.OCR.R"},
-}
-
-DEFAULT_DOUBLE_CROP: Dict[str, Dict[str, Any]] = {
-    "left": {
-        "table_crop": "0.02,0.52,0.97,0.90",
-        "date_crop": "0.02,0.02,0.55,0.34",
-    },
-    "right": {
-        "table_crop": "0.03,0.52,1.0,0.90",
-        "date_crop": "0.02,0.02,0.55,0.34",
-    },
 }
 
 
@@ -82,27 +72,21 @@ def get_camera_defs(cfg: Optional[Dict[str, Any]] = None) -> Dict[str, Dict[str,
 
 
 def get_double_defs(cfg: Optional[Dict[str, Any]] = None) -> Dict[str, Dict[str, Any]]:
-    """capture.double：table_crop / date_crop（搜索带）；附带 cameras 的 tag/host。"""
-    cfg = cfg or get_config()
-    cap = cfg.get("capture") or {}
-    raw = cap.get("double") or cap.get("dual") or {}
+    """左右侧测点前缀、相机信息、table_search。"""
     cams = get_camera_defs(cfg)
     out: Dict[str, Dict[str, Any]] = {}
     for side in ("left", "right"):
-        crop = dict(DEFAULT_DOUBLE_CROP[side])
-        side_raw = raw.get(side) or {}
-        if side_raw.get("table_crop") not in (None, ""):
-            crop["table_crop"] = side_raw["table_crop"]
-        if side_raw.get("date_crop") not in (None, ""):
-            crop["date_crop"] = side_raw["date_crop"]
         cam = cams[side]
+        search = get_camera_table_search(side, cfg)
         out[side] = {
-            **crop,
             "tag": cam.get("tag") or DEFAULT_CAMERA[side]["tag"],
             "host": cam.get("host") or "",
             "type": cam.get("type") or "",
             "id": side,
             "title": side,
+            "table_search": (
+                ",".join(f"{v:g}" for v in search) if search is not None else ""
+            ),
         }
     return out
 
@@ -161,16 +145,13 @@ def _ocr_one_side(
     tag_prefix: str,
     ocr_cfg: Dict[str, Any],
     workdir: Path,
-    base_date: Optional[datetime],
     export_excel: bool = True,
     debug_dir: Optional[Path] = None,
     fix_decimal: Optional[Dict[str, Any]] = None,
-    date_cfg: Optional[Dict[str, Any]] = None,
-    table_crop: Optional[Tuple[float, float, float, float]] = None,
     side: str = "",
+    search_crop: Optional[Tuple[float, float, float, float]] = None,
 ) -> Dict[str, Any]:
-    """对一侧整屏图做 OCR（双摄 layout=double）。"""
-    del base_date
+    """对一侧图：search 窗内 auto，失败即止。"""
     pfx = cam_log_prefix(side)
     try:
         scale = float(ocr_cfg.get("scale", get_ocr_scale()))
@@ -189,22 +170,17 @@ def _ocr_one_side(
         workdir=workdir,
         scale=scale,
         min_confidence=float(ocr_cfg.get("min_confidence", 0.3)),
-        crop=None,
         tag_prefix=tag_prefix,
-        base_date=None,
         debug_dir=debug_dir,
         layout="double",
         fix_decimal=(
             fix_decimal if fix_decimal is not None else get_ocr_fix_decimal_cfg()
         ),
-        auto_enable=bool(ocr_cfg.get("auto_enable", get_ocr_auto_enable())),
         max_ocr_width=max_ocr_width,
-        date_cfg=date_cfg
-        if date_cfg is not None
-        else get_ocr_date_cfg(layout="double", side=side or "left"),
-        table_crop=table_crop,
         onnx_threads=int(ocr_cfg.get("onnx_threads", get_ocr_onnx_threads())),
         log_prefix=pfx,
+        search_crop=search_crop,
+        camera_side=str(side or "").strip().lower(),
     )
     payload = ocr_result_to_dict(result)
     if export_excel and result.ok and result.points:
@@ -288,8 +264,8 @@ def ocr_side_images(
     capture_errors: Optional[Dict[str, str]] = None,
 ) -> Dict[str, Any]:
     """
-    对左右两路已抓到的整屏图分别 OCR（可选写 PI）。
-    无整图分缝；可选各侧 auto_monitor。
+    对左右两路已抓到的整图分别做表格区域识别和数据识别（可选写 PI）。
+    只做 cameras.*.table_search 内 auto；失败本轮即止（不试 fixed/原图）。
     """
     t_all = time.perf_counter()
     cfg = get_config()
@@ -298,7 +274,6 @@ def ocr_side_images(
     ocr_cfg = cfg.get("ocr") or {}
     workdir = resolve_ocr_workdir(cfg)
     run_dir = new_ocr_run_dir("double", cfg)
-    auto_monitor = get_auto_monitor(cfg)
     min_points = get_ocr_min_points(cfg)
     capture_errors = dict(capture_errors or {})
 
@@ -342,18 +317,15 @@ def ocr_side_images(
 
         side_debug = run_dir / side
         side_debug.mkdir(parents=True, exist_ok=True)
-        work_path, monitor_meta, monitor_path = prepare_monitor_work_image(
-            pane_path,
-            side_debug,
-            enabled=bool(auto_monitor),
-            log_prefix=cam_log_prefix(side),
-        )
+        work_path = pane_path
         monitors[side] = {
-            **(monitor_meta or {}),
-            "monitor_image": monitor_path,
+            "ok": True,
+            "mode": "skipped",
+            "enabled": False,
             "source": str(src),
         }
         tag_prefix = str(cam.get("tag") or DEFAULT_CAMERA[side]["tag"]).strip()
+        search_crop = get_camera_table_search(side, cfg)
         side_jobs.append(
             {
                 "side": side,
@@ -363,37 +335,41 @@ def ocr_side_images(
                 "pane_path": work_path,
                 "source_path": str(src),
                 "side_debug": side_debug,
+                "search_crop": search_crop,
             }
         )
 
     def _run_side_job(job: Dict[str, Any]) -> Tuple[str, Dict[str, Any], int]:
         side = job["side"]
         pfx = cam_log_prefix(side)
-        logger.info("%s开始识别", pfx)
+        search_crop = job.get("search_crop")
+        if search_crop is not None:
+            search_desc = "search=" + ",".join(f"{v:.3f}" for v in search_crop)
+        else:
+            search_desc = "search=整图"
+        logger.info("%s开始识别 %s（auto 失败即止）", pfx, search_desc)
         t_side = time.perf_counter()
         ocr_dict = _ocr_one_side(
             pane_image=job["pane_path"],
             tag_prefix=job["tag_prefix"],
             ocr_cfg=ocr_cfg,
             workdir=workdir,
-            base_date=None,
             export_excel=export_excel,
             debug_dir=job["side_debug"],
             fix_decimal=get_ocr_fix_decimal_cfg(cfg),
-            date_cfg=get_ocr_date_cfg(cfg, layout="double", side=side),
-            table_crop=get_ocr_table_crop(cfg, layout="double", side=side),
             side=side,
+            search_crop=search_crop,
         )
         ms = _elapsed_ms(t_side)
         date_str = ocr_dict.get("base_date") or "-"
         pts_n = len(ocr_dict.get("points") or [])
         timing = ocr_dict.get("timing") or {}
         logger.info(
-            "%s识别结束 ms=%s date_ms=%s table_ms=%s ok=%s date=%s points=%s",
+            "%s识别结束 ms=%s 区域=%s 数据=%s ok=%s date=%s points=%s",
             pfx,
             ms,
-            timing.get("date_ms", 0),
-            timing.get("table_ms", 0),
+            timing.get("region_ms", 0),
+            timing.get("data_ms", 0),
             bool(ocr_dict.get("ok")),
             date_str,
             pts_n,
@@ -425,35 +401,20 @@ def ocr_side_images(
         ocr_dict = ocr_by_side[side]
         pts = _points_payload(ocr_dict, side)
         pfx = cam_log_prefix(side)
-        date_failed = str(ocr_dict.get("date_source") or "") in ("failed", "disabled") or (
-            ocr_dict.get("ok") is False
-            and str(ocr_dict.get("reason") or "").startswith("date")
-        )
-        if date_failed:
-            quality = {
-                "ok": False,
-                "point_count": 0,
-                "min_points": min_points,
-                "reason": ocr_dict.get("reason") or "date_ocr_failed",
-                "message": ocr_dict.get("message")
-                or "未识别到左上角日期筛选框，已跳过表格 OCR",
-            }
-            side_ok = False
+        quality = evaluate_ocr_point_count(len(pts), min_points)
+        side_ok = bool(quality.get("ok"))
+        if not side_ok:
+            fail = resolve_ocr_fail_fields(quality, ocr_dict)
+            # 对外 reason/message 用具体原因（蒙板等），点数门槛仅作 quality 记录
+            ocr_dict["reason"] = fail["reason"]
+            ocr_dict["message"] = fail["message"]
             logger.warning(
-                "%s跳过写 PI：日期识别失败 — %s",
+                "%s跳过写 PI：%s（有效点数 %s < min_points=%s）",
                 pfx,
-                quality.get("message"),
+                fail["message"],
+                quality.get("point_count"),
+                quality.get("min_points"),
             )
-        else:
-            quality = evaluate_ocr_point_count(len(pts), min_points)
-            side_ok = bool(quality.get("ok"))
-            if not side_ok:
-                logger.warning(
-                    "%s跳过写 PI：有效点数 %s < min_points=%s",
-                    pfx,
-                    quality.get("point_count"),
-                    quality.get("min_points"),
-                )
         ocr_dict["quality"] = quality
         all_points.extend(pts)
         if side_ok:
@@ -481,11 +442,20 @@ def ocr_side_images(
             "ocr_ms": side_ocr_ms[side],
             "date_ms": int((ocr_dict.get("timing") or {}).get("date_ms") or 0),
             "table_ms": int((ocr_dict.get("timing") or {}).get("table_ms") or 0),
+            "region_ms": int((ocr_dict.get("timing") or {}).get("region_ms") or 0),
+            "data_ms": int((ocr_dict.get("timing") or {}).get("data_ms") or 0),
             "monitor": monitors.get(side),
+            "table_crop_fallback": bool(ocr_dict.get("table_crop_fallback")),
+            "table_crop_fallback_reason": ocr_dict.get(
+                "table_crop_fallback_reason"
+            ),
+            "table_crop_fallback_message": ocr_dict.get(
+                "table_crop_fallback_message"
+            ),
         }
         if not side_ok:
-            side_info["reason"] = quality.get("reason") or ocr_dict.get("reason")
-            side_info["message"] = quality.get("message") or ocr_dict.get("message")
+            side_info["reason"] = ocr_dict.get("reason") or quality.get("reason")
+            side_info["message"] = ocr_dict.get("message") or quality.get("message")
         sides[side] = side_info
 
     ocr_ms = _elapsed_ms(t_ocr_all)
@@ -508,8 +478,12 @@ def ocr_side_images(
             "right_ocr_ms": side_ocr_ms.get("right", 0),
             "left_date_ms": int(sides["left"].get("date_ms") or 0),
             "left_table_ms": int(sides["left"].get("table_ms") or 0),
+            "left_region_ms": int(sides["left"].get("region_ms") or 0),
+            "left_data_ms": int(sides["left"].get("data_ms") or 0),
             "right_date_ms": int(sides["right"].get("date_ms") or 0),
             "right_table_ms": int(sides["right"].get("table_ms") or 0),
+            "right_region_ms": int(sides["right"].get("region_ms") or 0),
+            "right_data_ms": int(sides["right"].get("data_ms") or 0),
             "pi_ms": 0,
             "total_ms": 0,
         },
@@ -519,16 +493,42 @@ def ocr_side_images(
     if path_by_side["right"]:
         out["right_image"] = str(path_by_side["right"])
     if not left_ok and not right_ok:
-        out["reason"] = "points_below_min"
+        left_msg = str(sides["left"].get("message") or "").strip()
+        right_msg = str(sides["right"].get("message") or "").strip()
+        left_reason = str(sides["left"].get("reason") or "").strip()
+        right_reason = str(sides["right"].get("reason") or "").strip()
+        parts = []
+        if left_msg:
+            parts.append(f"左：{left_msg}")
+        if right_msg:
+            parts.append(f"右：{right_msg}")
+        # 两侧同为蒙板/表格失败时，顶层 reason 用更具体的码，便于列表筛选
+        if left_reason == right_reason and left_reason:
+            out["reason"] = left_reason
+        elif "dimmed_modal" in (left_reason, right_reason):
+            out["reason"] = "dimmed_modal"
+        else:
+            out["reason"] = "points_below_min"
         out["message"] = (
-            f"左右屏有效点数均低于 min_points={min_points} 或抓拍失败，本轮不写 PI"
+            "；".join(parts)
+            if parts
+            else (
+                f"左右屏有效点数均低于 min_points={min_points} 或抓拍失败，本轮不写 PI"
+            )
         )
 
     if write_pi:
         if write_points:
             t_pi = time.perf_counter()
             write = write_points_to_pi(write_points, tag=None)
-            out["timing"]["pi_ms"] = _elapsed_ms(t_pi)
+            pi_ms = _elapsed_ms(t_pi)
+            out["timing"]["pi_ms"] = pi_ms
+            logger.info(
+                "写PI ms=%s written=%s/%s",
+                pi_ms,
+                write.get("written", 0),
+                write.get("total", 0),
+            )
             write["sides_written"] = [
                 s for s in ("left", "right") if sides[s].get("ok")
             ]
@@ -536,6 +536,7 @@ def ocr_side_images(
                 s for s in ("left", "right") if not sides[s].get("ok")
             ]
         else:
+            logger.info("写PI ms=0（跳过：无有效测点）")
             write = {
                 "ok": False,
                 "written": 0,
@@ -544,7 +545,7 @@ def ocr_side_images(
                 "skipped": True,
                 "reason": "points_below_min",
                 "message": out.get("message")
-                or "左右屏 OCR 均未达到 min_points，不写 PI",
+                or "左右屏 OCR 均失败，不写 PI",
                 "sides_written": [],
                 "sides_skipped": ["left", "right"],
             }
@@ -553,7 +554,25 @@ def ocr_side_images(
             out["ok"] = bool(write.get("ok")) and (left_ok or right_ok)
             if not write.get("ok"):
                 out["reason"] = "pi_write_failed"
-                out["message"] = "写 PI 失败"
+                fails = [
+                    it
+                    for it in (write.get("items") or [])
+                    if not it.get("ok") and not it.get("skipped")
+                ]
+                first = fails[0] if fails else {}
+                why = first.get("message") or (
+                    f"code={first.get('pi_code')}"
+                    if first.get("pi_code") is not None
+                    else ""
+                )
+                tip = f"写 PI 未全部成功：{write.get('written', 0)}/{write.get('total', 0)}"
+                if why:
+                    tip += f" · {why}"
+                if len(fails) > 1:
+                    tip += f"（另有 {len(fails) - 1} 点失败）"
+                out["message"] = tip
+                write["message"] = tip
+                write["reason"] = "pi_write_failed"
         else:
             out["ok"] = False
     else:
@@ -658,6 +677,12 @@ def run_pipeline_dual(
     t_cap = time.perf_counter()
     captured = capture_dual_cameras(cfg)
     capture_ms = _elapsed_ms(t_cap)
+    logger.info(
+        "抓图 ms=%s left=%s right=%s",
+        capture_ms,
+        "ok" if "left" in captured else "fail",
+        "ok" if "right" in captured else "fail",
+    )
 
     left_path = str(captured["left"]) if "left" in captured else None
     right_path = str(captured["right"]) if "right" in captured else None
@@ -679,6 +704,11 @@ def run_pipeline_dual(
             },
             "timing": {"capture_ms": capture_ms, "total_ms": _elapsed_ms(t_all)},
         }
+        logger.info(
+            "耗时汇总 抓图 ms=%s 总计 ms=%s（跳过识别）",
+            capture_ms,
+            out["timing"]["total_ms"],
+        )
         return persist_pipeline_result(
             out, mode="double", trigger=trigger, started_at=started_at
         )
@@ -716,6 +746,18 @@ def run_pipeline_dual(
     timing["capture_ms"] = capture_ms
     timing["total_ms"] = _elapsed_ms(t_all)
     result["timing"] = timing
+    logger.info(
+        "耗时汇总 抓图 ms=%s 识别 ms=%s 写PI ms=%s 总计 ms=%s "
+        "左区域=%s 左数据=%s 右区域=%s 右数据=%s",
+        capture_ms,
+        timing.get("ocr_ms", 0),
+        timing.get("pi_ms", 0),
+        timing.get("total_ms", 0),
+        timing.get("left_region_ms", 0),
+        timing.get("left_data_ms", 0),
+        timing.get("right_region_ms", 0),
+        timing.get("right_data_ms", 0),
+    )
     return persist_pipeline_result(
         result, mode="double", trigger=trigger, started_at=started_at
     )

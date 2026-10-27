@@ -3,7 +3,7 @@
 # 两路摄像头各自独立配置（不再共用 type）
 # type: mvs / gige / hikrobot = 海康机器人 GigE（MVS SDK）
 # type: isapi = 监控机 HTTP ISAPI
-# tag: 该路抓拍识别结果写 PI 时的测点前缀 → 前缀_1…_N
+# tag: 该路抓拍识别结果写 PI 时的测点前缀 → 前缀.01 / .02 / .03
 cameras:
   left:
     type: isapi
@@ -14,6 +14,16 @@ cameras:
     password: "Sdyw@192"
     channel: "101"
     timeout_sec: 15
+    # auto 先验窗（相对整图 x0,y0,x1,y1）；空=整图 auto
+    # 左摄支架高：折线在上、表在下；选中高亮/近景时表可能偏上，y0 不宜过大
+    # （窗内 auto 失败本轮即止，不再上扩/整图兜底）
+    table_search: "0.0,0.18,1.0,0.98"
+    # 蒙板失败门槛（可选；不配则用引擎侧别默认）
+    # 左正常 search content≈145~151；蒙板≈130~135 → content_max 宜低于正常下限
+    modal_dim:
+      content_max: 140
+      mean_max: 140
+      grey_min: 0.33
   right:
     type: mvs
     host: "192.168.16.6"
@@ -22,44 +32,39 @@ cameras:
     # MVS：本机连接相机的网卡 IP（枚举匹配失败时按 IP 直连用）
     net_export: ""
     jpeg_quality: 80
+    # 右摄机位低：表在画幅偏上、底下是桌面/空白页脚 → 偏上半找表；空=整图
+    # y1 勿过大：空白区摩尔纹假蓝易压过偏暗真表体，裁切从腰线切掉表头
+    # 行选中青绿时蓝带易粘满搜索窗；引擎收核，仍失败本轮即止
+    table_search: "0.0,0.02,1.0,0.68"
+    # 右正常 content≈210+；蒙板≈110 → content_max 可高于左
+    modal_dim:
+      content_max: 160
+      mean_max: 140
+      grey_min: 0.33
 
 capture:
-  mode: single
   dir: "data/captures"
-  # 本分支固定双摄；mode 字段忽略
   # 定时：开启后立刻跑一轮；本轮结束后再等 interval_sec 秒开始下一周期
   # 落盘：data/captures/YYYYMMDD/H-MM_<left|right>.jpg
+  # 表格识别：cameras.*.table_search 内 auto，成败本轮即止
   schedule:
     enabled: false
     interval_sec: 10
-  # 各侧整图可先裁显示器有效区域再 OCR（四周有环境时建议开）
-  auto_monitor: true
-  # 双摄：table_crop=表格固定裁剪；date_crop=日期搜索带（相对有效区域图）
-  double:
-    left:
-      table_crop: "0.02,0.52,1.0,0.90"
-      date_crop: "0.02,0.02,0.55,0.34"
-    right:
-      table_crop: "0.03,0.52,1.0,0.90"
-      date_crop: "0.02,0.02,0.55,0.34"
 
 ocr:
   workdir: "app/ocr_engine"
-  scale: 2.0
-  max_ocr_width: 4800
+  # 2K 左屏表已够宽；再 ×2 易放大拍屏摩尔纹且拖垮多通道 OCR
+  # 引擎按「参考宽×scale」自适应，大图少放、小图多放
+  scale: 1.35
+  max_ocr_width: 2800
   min_confidence: 0.3
-  min_points: 8
-  # auto_enable：先跑 fixed；开启且 fixed 不够好（表头不可用或列<4）时再跑 auto
-  auto_enable: true
+  min_points: 6
+  # 表格：仅 auto（cameras.*.table_search）；失败本轮结束，等下一抓拍
+  # 弹窗蒙板压暗 → dimmed_modal 快速失败（不提亮硬识）
   parallel_sides: true
   onnx_threads: 2
-  # 日期识别开关：true=跑画面日期 OCR；false=不识别，直接用本机系统日(年月日)继续表格 OCR
-  date_ocr_enabled: false
-  # 仅当 date_ocr_enabled=true 且日期识别失败时生效：
-  #   true=用本机系统日继续表格 OCR 并写 PI（时分仍取表头；写库日仍按 pi.pi_date_back_days 提前）
-  #   false=跳过表格 OCR、不写 PI（原逻辑）
-  date_fallback_system: true
-  # 中间产物：double / YYYYMMDD_HHMMSS_mmm/{left|right}/
+  # 本分支不识别画面日期，业务日固定为电脑系统日（年月日）
+  # 中间产物：YYYYMMDD/double/YYYYMMDD_HHMMSS_mmm/{left|right}/（按日分区，同 captures）
   artifacts_dir: "data/ocr_runs"
   fix_decimal:
     enabled: true
@@ -74,12 +79,13 @@ pi:
   # 测点前缀见 cameras.*.tag
   dll_dir: "app/pidll"
   dll_name: "piapi.dll"
-  server: "10.168.160.240"
+  server: 10.168.160.240
+  # server: "192.168.11.130"
   user: "piadmin"
   password: ""
   verify_write: true
   value_max: 1000
-  # 写 PI 业务日 = OCR 识别日向前退几天；1=提前一天，0=当天
+  # 写 PI 业务日 = 电脑系统日向前退几天；1=提前一天，0=当天
   pi_date_back_days: 1
 
 server:

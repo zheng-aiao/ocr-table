@@ -3,7 +3,8 @@ setlocal EnableExtensions
 cd /d "%~dp0.."
 chcp 65001 >nul 2>&1
 
-set "OUT=%cd%\..\gx-capture-demo-update.zip"
+for /f %%i in ('powershell -NoProfile -Command "Get-Date -Format yyyyMMdd-HHmm"') do set "TS=%%i"
+set "OUT=%cd%\..\gx-ocr-update-%TS%.zip"
 if exist "%OUT%" del /f /q "%OUT%"
 
 echo 正在打包轻量更新包（不含 python / .venv / data）...
