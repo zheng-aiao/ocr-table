@@ -8,7 +8,7 @@ import os
 import sys
 from datetime import datetime
 from pathlib import Path
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 
 # 尽早限制 OpenMP/BLAS，避免 RapidOCR 默认占满 CPU（识别时浏览器极慢）
 for _k, _v in (
@@ -45,7 +45,15 @@ from .config import (
     update_capture_tag,
 )
 from .excel_export import export_ocr_excel
-from .pipeline import capture_only, curve, ocr_only, run_pipeline, write_points_to_pi
+from .pipeline import (
+    capture_only,
+    curve,
+    ocr_only,
+    read_pi_matrix,
+    run_pipeline,
+    write_pi_matrix,
+    write_points_to_pi,
+)
 from .pipeline_dual import (
     get_camera_defs,
     get_capture_mode,
@@ -174,6 +182,12 @@ def debug_page():
     return _page("debug.html")
 
 
+@app.get("/pi-correct")
+def pi_correct_page():
+    """PI 值手动纠正页（96 时刻 × 三行测点）。"""
+    return _page("pi_correct.html")
+
+
 @app.get("/single")
 def single_page():
     """单屏一键 Demo。"""
@@ -265,6 +279,22 @@ def api_get_run(run_id: str):
     if not data:
         raise HTTPException(404, f"执行记录不存在: {run_id}")
     return {"ok": True, "run": data}
+
+
+@app.get("/api/votes")
+def api_get_votes(
+    day: Optional[str] = Query(
+        None, description="业务日 yyyy-MM-dd 或 yyyyMMdd；默认今天"
+    ),
+):
+    """跨轮众数票箱：按测点+时刻返回候选值次数与排名（详情页悬浮用）。"""
+    from .vote_store import tallies_for_api
+
+    try:
+        return tallies_for_api(day)
+    except Exception as e:
+        logger.exception("votes api failed")
+        raise HTTPException(500, str(e)) from e
 
 
 @app.post("/api/capture")
@@ -690,6 +720,59 @@ def api_curve(
         return curve(start=start, end=end, tag=tag)
     except Exception as e:
         logger.exception("curve failed")
+        raise HTTPException(500, str(e)) from e
+
+
+@app.get("/api/pi/matrix")
+def api_pi_matrix_read(
+    day: str = Query(
+        ...,
+        description="系统日/OCR 业务日 yyyy-MM-dd（或带时分）；写库日=该日−pi_date_back_days",
+    ),
+    side: Optional[str] = Query("left", description="left|right"),
+    tag: Optional[str] = Query(None, description="测点前缀；优先于 side"),
+):
+    """按系统日查询某侧三行测点 00:15–24:00 矩阵（读写库日与正式流水线一致）。"""
+    try:
+        return read_pi_matrix(day=day, side=side, tag=tag)
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from e
+    except Exception as e:
+        logger.exception("pi matrix read failed")
+        raise HTTPException(500, str(e)) from e
+
+
+class PiMatrixWriteRequest(BaseModel):
+    day: str = Field(
+        ...,
+        description="系统日/OCR 业务日 yyyy-MM-dd；写库日=该日−pi_date_back_days",
+    )
+    side: Optional[str] = Field("left", description="left|right")
+    tag: Optional[str] = Field(None, description="测点前缀；优先于 side")
+    rows: Optional[List[List[Optional[float]]]] = Field(
+        None, description="全量矩阵（与 headers 对齐）；与 changes 二选一"
+    )
+    changes: Optional[List[Dict[str, Any]]] = Field(
+        None,
+        description="仅改动格 [{row, col, value}, ...]；优先于 rows",
+    )
+
+
+@app.post("/api/pi/matrix")
+def api_pi_matrix_write(body: PiMatrixWriteRequest):
+    """将纠正页矩阵写回 PI（写库日与正式流水线一致）。"""
+    try:
+        return write_pi_matrix(
+            day=body.day,
+            rows=body.rows or [],
+            side=body.side,
+            tag=body.tag,
+            only_changed=body.changes,
+        )
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from e
+    except Exception as e:
+        logger.exception("pi matrix write failed")
         raise HTTPException(500, str(e)) from e
 
 

@@ -117,7 +117,7 @@ ocr.bat start
 - 执行履历：每次流水线写入 `data/runs/YYYYMMDD/{id}.json`（并同步到 `data/ocr_runs/.../run.json`）；首页列表 + `/runs/{id}` 详情
 - OCR 质量：`ocr.min_points`（默认 8）。有效点数不足视为切屏/熄屏/模糊等失败：**不写 PI**；双屏左右各自判断，合格侧照常写
 - 抓图目录 `data/captures/YYYYMMDD/`，文件名按时刻：`9-09.jpg`、`10-20.jpg`（Windows 不能用 `:`，用 `-`；同分钟重复为 `_2`…）；外层日期 + 文件名即完整时间
-- OCR 过程中间文件：`ocr.artifacts_dir`（默认 `data/ocr_runs/YYYYMMDD/{single|dual|double}/…`，按日分区，始终落盘，无开关）
+- OCR 过程中间文件：`ocr.artifacts_dir`（默认 `data/ocr_runs/YYYYMMDD/…`，按日分区，始终落盘，无开关）
 - 定时处置：`schedule.enabled=true` 后立刻跑第一轮，本轮结束后再等 `interval_sec` 秒开始下一周期；按 `schedule.capture` / `ocr` / `pi` 截断执行；改 YAML 后下一轮前热加载
 - Excel 备份：`excel.enabled` / `excel.dir`，按日分区 `data/exports/YYYYMMDD/`（写 PI **不读** Excel）
 - 通道拍不到目标画面时改 `camera.channel`

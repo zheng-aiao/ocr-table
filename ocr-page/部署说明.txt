@@ -51,7 +51,7 @@
   │
   ├─ data\                   运行数据（自动生成，一般不必打包进更新包）
   │   ├─ captures\YYYYMMDD\  抓图（按日分区）
-  │   ├─ ocr_runs\YYYYMMDD\  OCR 中间结果（按日 / single|dual|double）
+  │   ├─ ocr_runs\YYYYMMDD\  OCR 中间结果（按日 / 时间戳目录）
   │   ├─ runs\YYYYMMDD\      执行履历 JSON（按日分区）
   │   ├─ exports\YYYYMMDD\   Excel 导出（按日分区）
   │   ├─ ocr.log             服务日志

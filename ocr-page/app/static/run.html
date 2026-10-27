@@ -257,6 +257,12 @@
       );
       color: #e8c547;
     }
+    td.has-vote {
+      cursor: help;
+    }
+    td.has-vote.vote-winner-mismatch {
+      box-shadow: inset 0 0 0 1px rgba(230, 192, 123, 0.55);
+    }
     .gap-legend {
       margin: 8px 0 0;
       color: var(--muted);
@@ -800,6 +806,64 @@
     const candStore = {};
     /** 各侧最终结果表（胜出者 + 空格补录），供候选弹窗对照 */
     const sideFinalStore = {};
+    /** 众数票箱：key = `${tag}|HH:MM` → { mode, counts, rank, winner, ... } */
+    const voteStore = {};
+
+    function normVoteTime(label) {
+      const m = String(label == null ? '' : label).trim().match(/^(\d{1,2}):(\d{2})$/);
+      if (!m) return '';
+      const h = Number(m[1]);
+      const mi = Number(m[2]);
+      if (h === 24 && mi === 0) return '24:00';
+      if (!Number.isFinite(h) || !Number.isFinite(mi)) return '';
+      return `${String(h).padStart(2, '0')}:${String(mi).padStart(2, '0')}`;
+    }
+
+    function voteSlotKey(tag, header) {
+      const t = String(tag || '').trim();
+      const lab = normVoteTime(header);
+      return t && lab ? `${t}|${lab}` : '';
+    }
+
+    function mergeVoteSlots(slots) {
+      if (!slots || typeof slots !== 'object') return;
+      for (const [k, v] of Object.entries(slots)) {
+        if (!k || !v || typeof v !== 'object') continue;
+        voteStore[k] = v;
+      }
+    }
+
+    function formatVoteTip(slot, cellVal) {
+      if (!slot) return '';
+      const mode = slot.mode || '';
+      if (mode === 'forecast') {
+        return '预测段（本机时间未到表头，不计票；展示本轮 OCR）';
+      }
+      const rank = Array.isArray(slot.rank) && slot.rank.length
+        ? slot.rank
+        : Object.entries(slot.counts || {})
+            .map(([value, count]) => ({ value, count: Number(count) || 0 }))
+            .sort((a, b) => b.count - a.count || String(a.value).localeCompare(String(b.value)));
+      if (!rank.length) return '已公布时段 · 尚无计票';
+      const lines = rank.slice(0, 8).map((r, i) => `${i + 1}. ${r.value} ×${r.count}`);
+      const winner = slot.winner != null ? String(slot.winner) : (rank[0] && rank[0].value);
+      const total = slot.total != null ? slot.total : rank.reduce((s, r) => s + (Number(r.count) || 0), 0);
+      const cur = String(cellVal == null ? '' : cellVal).trim();
+      const parts = [
+        `众数胜出 ${winner}（共 ${total} 票）`,
+        `本格 OCR ${cur || '空'}`,
+        lines.join('；'),
+      ];
+      return parts.filter(Boolean).join('\n');
+    }
+
+    function normVoteValueKey(v) {
+      const n = Number(String(v == null ? '' : v).trim().replace(/,/g, ''));
+      if (!Number.isFinite(n)) return '';
+      const r = Math.round(n * 10000) / 10000;
+      if (Math.abs(r - Math.round(r)) < 1e-9) return String(Math.round(r));
+      return String(r).replace(/(\.\d*?[1-9])0+$/, '$1').replace(/\.0+$/, '');
+    }
 
     function escHtml(s) {
       return String(s == null ? '' : s)
@@ -1064,7 +1128,8 @@
       return String(s || '')
         .replace(/&/g, '&amp;')
         .replace(/"/g, '&quot;')
-        .replace(/</g, '&lt;');
+        .replace(/</g, '&lt;')
+        .replace(/\r\n|\n|\r/g, '&#10;');
     }
 
     function copyPathBtn(path, label) {
@@ -1290,12 +1355,23 @@
         html += `<tr><th>${escapeHtml(labels[i] || i + 1)}</th>`;
         const gapRow = gapMap[i] || [];
         const stickyRow = sticky[i] || [];
+        const rowTag = labels[i] || '';
         for (let j = 0; j < headers.length; j++) {
           const v = row[j] == null ? '' : String(row[j]).trim();
           const src = gapRow[j] == null ? '' : String(gapRow[j]).trim();
           const stickyReason = stickyRow[j] == null ? '' : String(stickyRow[j]).trim();
+          const vk = voteSlotKey(rowTag, headers[j]);
+          const slot = vk ? voteStore[vk] : null;
           if (!v) {
-            html += '<td class="empty">空</td>';
+            const emptyTips = [];
+            if (slot) {
+              const tip = formatVoteTip(slot, '');
+              if (tip) emptyTips.push(tip);
+            }
+            const titleAttr = emptyTips.length
+              ? ` title="${escapeAttr(emptyTips.join('\n'))}"`
+              : '';
+            html += `<td class="empty${slot ? ' has-vote' : ''}"${titleAttr}>空</td>`;
           } else {
             const cls = [];
             const tips = [];
@@ -1307,8 +1383,23 @@
               cls.push('sticky-handled');
               tips.push('业务层' + stickyReason + '（引擎宽框粘连）');
             }
+            if (slot) {
+              cls.push('has-vote');
+              const tip = formatVoteTip(slot, v);
+              if (tip) tips.push(tip);
+              const winKey = slot.winner != null ? String(slot.winner) : '';
+              const cellKey = normVoteValueKey(v);
+              if (
+                slot.mode === 'majority'
+                && winKey
+                && cellKey
+                && winKey !== cellKey
+              ) {
+                cls.push('vote-winner-mismatch');
+              }
+            }
             const classAttr = cls.length ? ` class="${cls.join(' ')}"` : '';
-            const titleAttr = tips.length ? ` title="${escapeAttr(tips.join('；'))}"` : '';
+            const titleAttr = tips.length ? ` title="${escapeAttr(tips.join('\n'))}"` : '';
             html += `<td${classAttr}${titleAttr}>${escapeHtml(v)}</td>`;
           }
         }
@@ -1402,16 +1493,22 @@
         sticky_map: view.stickyMap,
         sticky_filled: Number(ctx.sticky_filled || 0) || 0,
       };
-      const dimmed = ctx.table_crop_fallback_reason === 'dimmed_modal';
+      const abortReason = ctx.table_crop_fallback_reason;
+      const dimmed = abortReason === 'dimmed_modal';
+      const blackOsd = abortReason === 'black_osd';
       const st = ctx.ok
         ? '<span class="badge ok">合格</span>'
         : (dimmed
           ? '<span class="badge fail">蒙板压暗</span>'
-          : '<span class="badge fail">未达下限</span>');
+          : (blackOsd
+            ? '<span class="badge fail">黑框OSD</span>'
+            : '<span class="badge fail">未达下限</span>'));
       const fbBadge = ctx.table_crop_fallback
         ? (dimmed
           ? '<span class="badge" style="background:rgba(248,81,73,0.18);color:var(--err);">弹窗蒙板</span>'
-          : '<span class="badge" style="background:rgba(230,192,123,0.18);color:var(--warn);">表格区域告警</span>')
+          : (blackOsd
+            ? '<span class="badge" style="background:rgba(248,81,73,0.18);color:var(--err);">黑框OSD</span>'
+            : '<span class="badge" style="background:rgba(230,192,123,0.18);color:var(--warn);">表格区域告警</span>'))
         : '';
       const exp = ctx.expected_cells != null ? ctx.expected_cells : '-';
       const gapN = Number(ctx.gap_filled || 0) || 0;
@@ -1423,11 +1520,14 @@
       if (stickyN > 0) {
         notes.push(`<p class="gap-legend"><span class="swatch" style="background:#388bfd;box-shadow:inset 0 0 0 1px rgba(56,139,253,0.5);"></span>粘连业务处理 ${stickyN} 格（蓝底 · 悬停查看拆分/重识）</p>`);
       }
+      notes.push(`<p class="gap-legend" style="opacity:0.9;">悬停单元格可查看跨轮众数：历史识别值与票数（已公布时段写入 PI 取次数最多者；预测段不计票）</p>`);
       const bestCap = dimmed
         ? '表格区域（弹窗蒙板压暗，本轮未识别）'
-        : (ctx.table_crop_fallback
-          ? '最终表格图 best_table（自动定位失败）'
-          : '最终胜出表格原图 best_table');
+        : (blackOsd
+          ? '表格区域（显示器黑框 OSD，本轮未识别）'
+          : (ctx.table_crop_fallback
+            ? '最终表格图 best_table（自动定位失败）'
+            : '最终胜出表格原图 best_table'));
       const failMsg = sideFailMessage(ctx);
       const msgHtml = failMsg
         ? `<p style="color:${ctx.table_crop_fallback && ctx.ok ? 'var(--warn)' : 'var(--err)'};font-size:0.88rem;margin:10px 0 0;">${escHtml(failMsg)}</p>`
@@ -1455,11 +1555,14 @@
         return `<div class="side-col"><section class="card"><p class="side-title">${name}</p><p style="color:var(--muted);">无数据</p></section></div>`;
       }
       const dimmed = side.table_crop_fallback_reason === 'dimmed_modal';
+      const blackOsd = side.table_crop_fallback_reason === 'black_osd';
       const st = side.ok
         ? '<span class="badge ok">合格</span>'
         : (dimmed
           ? '<span class="badge fail">蒙板压暗</span>'
-          : '<span class="badge fail">未达下限</span>');
+          : (blackOsd
+            ? '<span class="badge fail">黑框OSD</span>'
+            : '<span class="badge fail">未达下限</span>'));
       const titleExtra = side.title ? ` · ${side.title}` : '';
       const sideMsg = sideFailMessage(side);
       return `<div class="side-col">
@@ -1490,6 +1593,7 @@
       try {
         for (const key of Object.keys(candStore)) delete candStore[key];
         for (const key of Object.keys(sideFinalStore)) delete sideFinalStore[key];
+        for (const key of Object.keys(voteStore)) delete voteStore[key];
         const resp = await fetch('/api/runs/' + encodeURIComponent(runId));
         const data = await resp.json();
         if (!resp.ok) throw new Error(data.detail || '未找到记录');
@@ -1498,6 +1602,21 @@
         document.getElementById('title').textContent = run.finished_at || run.id;
         document.getElementById('sub').textContent =
           `${run.mode === 'dual' ? '双屏' : '单屏'} · ${triggerLabel(run.trigger)} · ${run.id}`;
+
+        // 票箱：先用履历快照，再拉当日最新统计覆盖（悬停看当前排名）
+        mergeVoteSlots((run.vote || {}).slots);
+        const voteDay = (run.vote && run.vote.date)
+          || (run.left && run.left.base_date)
+          || (run.right && run.right.base_date)
+          || (run.base_date)
+          || (String(run.finished_at || run.id || '').slice(0, 10));
+        if (voteDay) {
+          try {
+            const vr = await fetch('/api/votes?day=' + encodeURIComponent(voteDay));
+            const vd = await vr.json();
+            if (vr.ok && vd && vd.slots) mergeVoteSlots(vd.slots);
+          } catch (_) { /* 票箱可选 */ }
+        }
 
         const pi = run.pi || {};
         let body = `

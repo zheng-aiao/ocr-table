@@ -5,9 +5,9 @@ from __future__ import annotations
 
 import logging
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from .config import (
     get_camera_table_search,
@@ -18,12 +18,18 @@ from .config import (
     get_ocr_fix_decimal_cfg,
     get_ocr_scale,
     get_ocr_onnx_threads,
+    get_pi_date_back_days,
     get_pi_value_max,
     new_ocr_run_dir,
     resolve_ocr_workdir,
 )
 from .excel_export import export_ocr_excel
-from .ocr_bridge import extract_points_from_image, ocr_result_to_dict, row_tag_name
+from .ocr_bridge import (
+    _pi_write_base_date,
+    extract_points_from_image,
+    ocr_result_to_dict,
+    row_tag_name,
+)
 from .pi_client import get_pi_client
 
 logger = logging.getLogger(__name__)
@@ -424,3 +430,262 @@ def curve(
         "count": len(series),
         "points": series,
     }
+
+
+# 全日现货刻度：00:15 … 24:00，共 96 点（步长 15 分钟）
+PI_MATRIX_SLOT_COUNT = 96
+PI_MATRIX_ROW_COUNT = 3
+
+
+def pi_matrix_headers() -> List[str]:
+    """表头时刻 00:15–24:00。"""
+    headers: List[str] = []
+    for i in range(1, PI_MATRIX_SLOT_COUNT + 1):
+        total = i * 15
+        if total >= 24 * 60:
+            headers.append("24:00")
+        else:
+            headers.append(f"{total // 60:02d}:{total % 60:02d}")
+    return headers
+
+
+def _parse_pi_day(raw: str) -> datetime:
+    """解析纠正页系统日（与 OCR 业务日一致）：yyyy-MM-dd 或带时分。"""
+    text = (raw or "").strip().replace("T", " ")
+    if not text:
+        raise ValueError("系统日不能为空")
+    for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M", "%Y-%m-%d"):
+        try:
+            dt = datetime.strptime(text, fmt)
+            return dt.replace(hour=0, minute=0, second=0, microsecond=0)
+        except ValueError:
+            continue
+    try:
+        return datetime.strptime(text[:10], "%Y-%m-%d")
+    except ValueError as e:
+        raise ValueError(f"无法解析系统日: {raw}") from e
+
+
+def _resolve_matrix_pi_day(raw: str) -> Tuple[datetime, datetime, int]:
+    """
+    纠正页日期对齐正式流水线：
+    入参 = 系统日/OCR 业务日；写库日 = 系统日 − pi.pi_date_back_days。
+    返回 (system_day, pi_day, back_days)。
+    """
+    system_day = _parse_pi_day(raw)
+    back_days = get_pi_date_back_days()
+    pi_day = _pi_write_base_date(system_day, back_days)
+    return system_day, pi_day, back_days
+
+
+def _slot_datetimes(day: datetime) -> List[Tuple[str, datetime]]:
+    """(表头标签, 写库时间戳)；day 须为写库日；24:00 → 次日 00:00。"""
+    base = day.replace(hour=0, minute=0, second=0, microsecond=0)
+    out: List[Tuple[str, datetime]] = []
+    for label in pi_matrix_headers():
+        if label == "24:00":
+            out.append((label, base + timedelta(days=1)))
+        else:
+            hh, mm = label.split(":")
+            out.append(
+                (
+                    label,
+                    base.replace(hour=int(hh), minute=int(mm), second=0, microsecond=0),
+                )
+            )
+    return out
+
+
+def _resolve_matrix_prefix(side: Optional[str] = None, tag: Optional[str] = None) -> Tuple[str, str]:
+    """
+    纠正页测点前缀。
+    优先完整 tag 参数；否则按 side=left|right 取 cameras.*.tag；默认 left。
+    返回 (side_key, prefix)。
+    """
+    from .pipeline_dual import get_camera_defs
+
+    cfg = get_config()
+    cams = get_camera_defs(cfg)
+    raw_tag = (tag or "").strip()
+    if raw_tag:
+        # 已是完整行测点则剥掉末段数字后缀，得到前缀
+        parts = raw_tag.rsplit(".", 1)
+        if len(parts) == 2 and parts[1].isdigit():
+            prefix = parts[0]
+        else:
+            prefix = raw_tag.rstrip("._")
+        side_key = "custom"
+        for sk, sc in cams.items():
+            if str(sc.get("tag") or "").strip().rstrip("._") == prefix:
+                side_key = sk
+                break
+        return side_key, prefix
+
+    side_key = (side or "left").strip().lower()
+    if side_key not in ("left", "right"):
+        side_key = "left"
+    prefix = str(cams.get(side_key, {}).get("tag") or "").strip().rstrip("._")
+    if not prefix:
+        prefix = get_capture_tag(cfg)
+    return side_key, prefix
+
+
+def _archive_map(series: List[Dict[str, Any]]) -> Dict[str, float]:
+    """档案序列 → 精确到分钟的键值表（只收 istat==0 的好值）。"""
+    out: Dict[str, float] = {}
+    for item in series or []:
+        try:
+            if int(item.get("s") or 0) != 0:
+                continue
+            t = datetime.strptime(str(item["t"]), "%Y-%m-%d %H:%M:%S")
+            key = t.strftime("%Y-%m-%d %H:%M")
+            out[key] = float(item["v"])
+        except (KeyError, TypeError, ValueError):
+            continue
+    return out
+
+
+def read_pi_matrix(
+    day: str,
+    *,
+    side: Optional[str] = None,
+    tag: Optional[str] = None,
+    rows: int = PI_MATRIX_ROW_COUNT,
+) -> Dict[str, Any]:
+    """
+    按系统日读某侧三行测点 00:15–24:00 的 PI 档案值。
+    写库日 = 系统日 − pi.pi_date_back_days（与正式流水线一致）；无档案格为 null。
+    """
+    system_day, pi_day, back_days = _resolve_matrix_pi_day(day)
+    side_key, prefix = _resolve_matrix_prefix(side=side, tag=tag)
+    n_rows = max(1, min(12, int(rows or PI_MATRIX_ROW_COUNT)))
+    headers = pi_matrix_headers()
+    slots = _slot_datetimes(pi_day)
+    # 查询窗：写库日 00:15 → 次日 00:00（含）
+    start_dt = slots[0][1]
+    end_dt = slots[-1][1]
+
+    cfg = get_config()
+    client = get_pi_client(cfg)
+    client.connect()
+
+    row_tags: List[str] = []
+    matrix: List[List[Optional[float]]] = []
+    counts: List[int] = []
+    for i in range(n_rows):
+        point_tag = row_tag_name(prefix, i)
+        row_tags.append(point_tag)
+        series = client.archive_values(point_tag, start_dt, end_dt)
+        amap = _archive_map(series)
+        row_vals: List[Optional[float]] = []
+        hit = 0
+        for _label, ts in slots:
+            key = ts.strftime("%Y-%m-%d %H:%M")
+            if key in amap:
+                row_vals.append(amap[key])
+                hit += 1
+            else:
+                row_vals.append(None)
+        matrix.append(row_vals)
+        counts.append(hit)
+
+    return {
+        "ok": True,
+        "day": system_day.strftime("%Y-%m-%d"),
+        "pi_day": pi_day.strftime("%Y-%m-%d"),
+        "pi_date_back_days": back_days,
+        "side": side_key,
+        "tag_prefix": prefix,
+        "headers": headers,
+        "row_tags": row_tags,
+        "rows": matrix,
+        "filled": counts,
+        "start": start_dt.strftime("%Y-%m-%d %H:%M:%S"),
+        "end": end_dt.strftime("%Y-%m-%d %H:%M:%S"),
+    }
+
+
+def write_pi_matrix(
+    day: str,
+    rows: List[List[Any]],
+    *,
+    side: Optional[str] = None,
+    tag: Optional[str] = None,
+    only_changed: Optional[List[Dict[str, Any]]] = None,
+) -> Dict[str, Any]:
+    """
+    将纠正页矩阵写回 PI（写库日 = 系统日 − pi.pi_date_back_days，与正式流水线一致）。
+    - only_changed：[{row, col, value}, ...] 只写改动格（推荐）
+    - 否则按 rows 全量：非空数值格全部写入
+    """
+    system_day, pi_day, back_days = _resolve_matrix_pi_day(day)
+    side_key, prefix = _resolve_matrix_prefix(side=side, tag=tag)
+    headers = pi_matrix_headers()
+    slots = _slot_datetimes(pi_day)
+
+    points: List[Dict[str, Any]] = []
+    if only_changed is not None:
+        for item in only_changed:
+            try:
+                ri = int(item.get("row"))
+                ci = int(item.get("col"))
+                val = float(item.get("value"))
+            except (TypeError, ValueError, AttributeError):
+                continue
+            if ri < 0 or ci < 0 or ci >= len(slots):
+                continue
+            label, ts = slots[ci]
+            points.append(
+                {
+                    "time_label": label,
+                    "value": val,
+                    "timestamp": ts.strftime("%Y-%m-%d %H:%M:%S"),
+                    "tag": row_tag_name(prefix, ri),
+                    "row_index": ri,
+                }
+            )
+    else:
+        for ri, row in enumerate(rows or []):
+            if not isinstance(row, (list, tuple)):
+                continue
+            for ci, cell in enumerate(row):
+                if ci >= len(slots):
+                    break
+                if cell is None or cell == "":
+                    continue
+                try:
+                    val = float(cell)
+                except (TypeError, ValueError):
+                    continue
+                label, ts = slots[ci]
+                points.append(
+                    {
+                        "time_label": label,
+                        "value": val,
+                        "timestamp": ts.strftime("%Y-%m-%d %H:%M:%S"),
+                        "tag": row_tag_name(prefix, ri),
+                        "row_index": ri,
+                    }
+                )
+
+    day_meta = {
+        "day": system_day.strftime("%Y-%m-%d"),
+        "pi_day": pi_day.strftime("%Y-%m-%d"),
+        "pi_date_back_days": back_days,
+        "side": side_key,
+        "tag_prefix": prefix,
+        "headers": headers,
+    }
+    if not points:
+        return {
+            "ok": True,
+            **day_meta,
+            "written": 0,
+            "total": 0,
+            "message": "没有可写入的点",
+            "items": [],
+        }
+
+    result = write_points_to_pi(points, tag=prefix)
+    result.update(day_meta)
+    return result

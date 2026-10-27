@@ -84,7 +84,11 @@ class TableImageExtractor:
         "ocr_invalid_auto_crop": "自动定位未识别到有效时刻表（本轮结束，请下一轮重试）",
         # 弹窗蒙板压暗：不提亮硬识，本轮直接失败，等关弹窗后再抓
         "dimmed_modal": "画面被弹窗蒙板压暗，本轮 auto 失败（请确认弹窗后重试）",
+        # 显示器黑框 OSD（如信号超出范围）：遮挡表体，本轮不识
+        "black_osd": "画面存在显示器黑框 OSD（如信号超出范围），本轮不识别",
     }
+    # 本轮直接空结果、不跑纠偏/OCR 的裁剪失败码（与弹窗同类）
+    CROP_ABORT_REASONS = frozenset({"dimmed_modal", "black_osd"})
     # 出清弹窗：有弹窗必有灰蒙板 → auto 快速失败（左右同一套规则）。
     # content/mean 门槛按侧区分：右表白底很亮，左 search 正常已偏暗，不能共用一个 content。
     # - 右正常 content≈210、灰≈0.06；右蒙板≈110、灰≈0.50
@@ -506,6 +510,99 @@ class TableImageExtractor:
             return True
         # 整页压暗、无明显亮表白底（左右 content 门槛不同）
         return mean_v < mean_max and content_v < content_max
+
+    def _has_black_osd_box(self, img: np.ndarray) -> bool:
+        """
+        显示器黑框 OSD（如「输入信号超出范围」）覆在表上：本轮应跳过。
+
+        与出清白纸弹窗不同：OSD 是实心近黑矩形，周围（尤其右侧）仍是亮表体，
+        不会触发整页蒙板 dimmed_modal。切掉边框/底栏后再找高填充暗块，
+        要求右侧明显更亮，避免把阴影或机位暗角当 OSD。
+        """
+        if img is None or getattr(img, "size", 0) <= 0:
+            return False
+        h, w = img.shape[:2]
+        if h < 80 or w < 80:
+            return False
+        hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
+        v = hsv[:, :, 2]
+        s = hsv[:, :, 1]
+        # 切掉显示器边框/任务栏，避免暗块与边框粘连
+        mx0 = int(w * 0.08)
+        mx1 = int(w * 0.96)
+        my0 = int(h * 0.06)
+        my1 = int(h * 0.78)
+        if mx1 - mx0 < 40 or my1 - my0 < 40:
+            return False
+        roi_v = v[my0:my1, mx0:mx1]
+        roi_s = s[my0:my1, mx0:mx1]
+        dark = ((roi_v <= 50) & (roi_s <= 85)).astype(np.uint8) * 255
+        k_close = cv2.getStructuringElement(cv2.MORPH_RECT, (9, 9))
+        dark = cv2.morphologyEx(dark, cv2.MORPH_CLOSE, k_close, iterations=2)
+        k_open = cv2.getStructuringElement(cv2.MORPH_RECT, (5, 5))
+        dark = cv2.morphologyEx(dark, cv2.MORPH_OPEN, k_open)
+        _n, _lab, stats, _ = cv2.connectedComponentsWithStats(dark, connectivity=8)
+        area_img = float(max(h * w, 1))
+        for i in range(1, int(stats.shape[0])):
+            x = int(stats[i, cv2.CC_STAT_LEFT])
+            y = int(stats[i, cv2.CC_STAT_TOP])
+            ww = int(stats[i, cv2.CC_STAT_WIDTH])
+            hh = int(stats[i, cv2.CC_STAT_HEIGHT])
+            area = int(stats[i, cv2.CC_STAT_AREA])
+            ar = float(area) / area_img
+            if ar < 0.035 or ar > 0.30:
+                continue
+            fill = float(area) / float(max(ww * hh, 1))
+            if fill < 0.72:
+                continue
+            asp = float(ww) / float(max(hh, 1))
+            if asp < 1.2 or asp > 4.5:
+                continue
+            if hh < h * 0.07 or ww < w * 0.16:
+                continue
+            bx0 = x + mx0
+            by0 = y + my0
+            cx = bx0 + ww * 0.5
+            cy = by0 + hh * 0.5
+            if cx < w * 0.12 or cx > w * 0.75:
+                continue
+            if cy < h * 0.08 or cy > h * 0.70:
+                continue
+            box = v[by0 : by0 + hh, bx0 : bx0 + ww]
+            inv = float(np.mean(box))
+            if inv > 48.0:
+                continue
+            if float(np.std(box)) > 32.0:
+                continue
+            pad = max(14, int(min(ww, hh) * 0.14))
+            rx0 = min(w, bx0 + ww)
+            rx1 = min(w, bx0 + ww + pad)
+            if rx1 - rx0 < 8:
+                continue
+            right_roi = v[by0 : by0 + hh, rx0:rx1]
+            right = float(np.mean(right_roi))
+            bright_frac = float(np.mean(right_roi >= 130))
+            if right < 120.0 or (right - inv) < 70.0 or bright_frac < 0.35:
+                continue
+            below_y0 = min(h, by0 + hh)
+            below_y1 = min(h, by0 + hh + pad)
+            above_y0 = max(0, by0 - pad)
+            above_y1 = by0
+            below = (
+                float(np.mean(v[below_y0:below_y1, bx0 : bx0 + ww]))
+                if below_y1 > below_y0
+                else 0.0
+            )
+            above = (
+                float(np.mean(v[above_y0:above_y1, bx0 : bx0 + ww]))
+                if above_y1 > above_y0
+                else 0.0
+            )
+            vert = max(below - inv, above - inv, 0.0)
+            if vert < 40.0 and (right - inv) < 100.0:
+                continue
+            return True
+        return False
 
     def _normalize_table_illumination(self, img: np.ndarray) -> np.ndarray:
         """
@@ -1136,8 +1233,8 @@ class TableImageExtractor:
         else:
             # 实际送入 OCR 的框会写入 last_auto_crop_ratio（含回退整图）
             img = self._resolve_table_auto_crop(img)
-            # 蒙板压暗：不跑纠偏/OCR，本轮直接空结果（bridge 判 auto 失败）
-            if self.last_crop_fallback_reason == "dimmed_modal":
+            # 蒙板/黑框 OSD：不跑纠偏/OCR，本轮直接空结果（bridge 判 auto 失败）
+            if self.last_crop_fallback_reason in self.CROP_ABORT_REASONS:
                 self._mark_ms("crop", t)
                 self.last_step_ms["region"] = int(
                     (time.perf_counter() - t_region) * 1000
@@ -1819,12 +1916,16 @@ class TableImageExtractor:
 
         摄像头贴近、画面基本就是表格时，自动框可以占满有效区域。
         弹窗蒙板整页压暗：直接 dimmed_modal 失败（不提亮硬识）。
+        显示器黑框 OSD：直接 black_osd 失败（不硬识被挡表）。
         蓝带失败 / 过矮 / 质量不足时回退整图，并置 last_crop_fallback。
         """
         self._clear_crop_fallback()
         # 蒙板压暗：准确率有限，快速失败等下一抓拍（关弹窗后亮度恢复）
         if self._is_modal_dimmed(img):
             return self._return_full_image_crop(img, reason="dimmed_modal")
+        # 黑框 OSD（信号超范围等）：表被挡，本轮跳过
+        if self._has_black_osd_box(img):
+            return self._return_full_image_crop(img, reason="black_osd")
         # 提亮前判暗/亮：轻度偏暗用稍高 S；局部 OSD 拉低 mean 但表已亮 → 淡蓝低 S
         mean_v, p75_v, content_v = self._table_illumination_stats(img)
         if p75_v >= 155.0 or content_v >= 150.0:
@@ -5261,6 +5362,42 @@ class TableImageExtractor:
             return False
         return matched >= max(2, int(math.ceil(compared * 0.6)))
 
+    def _scrub_price_tokens_from_upper_cells(
+        self, matrix: List[List[str]]
+    ) -> List[List[str]]:
+        """
+        单元格级防串行：整型电力/计划行里的电价样小数 → 清出上两行。
+
+        典型：11:30 第二行空被下扫读成 273.25，第三行反而空。
+        末行该列空时把值归还给电价行；末行已有值则只清上方。
+        多小数独立指标表不清洗。禁止第三行补第二行。
+        """
+        if not matrix or len(matrix) < 2:
+            return matrix
+        if self._matrix_is_multi_decimal_indicators(matrix):
+            return matrix
+        out = [list(r) for r in matrix]
+        price = out[-1]
+        for ri in range(len(out) - 1):
+            row = out[ri]
+            if self._row_looks_like_decimal_indicator(row):
+                continue
+            if not self._row_is_integerish_or_empty(row):
+                continue
+            for ci in range(len(row)):
+                u = str(row[ci] or "").strip()
+                if not u or not self._looks_like_price_decimal_token(u):
+                    continue
+                out[ri][ci] = ""
+                if ci >= len(price):
+                    continue
+                pv = str(price[ci] or "").strip()
+                if not pv or self._is_price_placeholder_token(pv):
+                    # 归还到电价行（纠正错位，不是用第三行补第二行）
+                    price[ci] = u
+        out[-1] = price
+        return out
+
     def _scrub_price_echo_from_upper_rows(
         self,
         matrix: List[List[str]],
@@ -5271,13 +5408,14 @@ class TableImageExtractor:
 
         留给后续 `_recover_leading_zero_data_rows` 按几何带补 0。
         多小数独立指标（≥2）不清洗，避免误删真小数行。
+        另：逐格清掉整型行里的电价样小数（单列串行）。
         """
         sticky_out = self._fit_sticky_map(sticky_map, matrix)
         if not matrix or len(matrix) < 2:
             return matrix, sticky_out
-        if self._matrix_is_multi_decimal_indicators(matrix):
-            return matrix, sticky_out
-        out = [list(r) for r in matrix]
+        out = self._scrub_price_tokens_from_upper_cells([list(r) for r in matrix])
+        if self._matrix_is_multi_decimal_indicators(out):
+            return out, sticky_out
         price = out[-1]
         if not self._row_looks_like_decimal_indicator(price):
             return out, sticky_out
@@ -5770,7 +5908,12 @@ class TableImageExtractor:
         return False
 
     def _looks_like_price_decimal_token(self, raw: object) -> bool:
-        """三位及以上小数 → 电价样，禁止写入电力/计划行（防串行）。"""
+        """
+        两位及以上小数 → 电价样，禁止写入电力/计划行（防串行）。
+
+        电价常见 xx.xx / xxx.xx / xxx.xxx；仅拦三位会漏掉 273.25 这类
+        从第三行扫进第二行的值。一位小数（如 420.4）仍允许留在上两行。
+        """
         s = str(raw or "").strip()
         if not s or "." not in s:
             return False
@@ -5778,7 +5921,7 @@ class TableImageExtractor:
         if not re.fullmatch(r"\d+\.\d+", body):
             return False
         frac = body.split(".", 1)[1]
-        return len(frac) >= 3
+        return len(frac) >= 2
 
     def _accept_upper_ocr_token(
         self,
@@ -5786,9 +5929,13 @@ class TableImageExtractor:
         *,
         price_row: Optional[Sequence[str]],
         col: int,
+        row: Optional[Sequence[str]] = None,
     ) -> bool:
-        """上两行新 OCR 值是否可采纳（拒电价样 / 与末行串值）。"""
+        """上两行新 OCR 值是否可采纳（拒电价样 / 与末行串值 / 整型行混入小数）。"""
         if not got or self._looks_like_price_decimal_token(got):
+            return False
+        # 同行已是整型功率/计划时，任何带点小数都视为串行（认不到留空）
+        if row is not None and "." in got and self._row_is_integerish_or_empty(row):
             return False
         if price_row is None or col >= len(price_row):
             return True
@@ -5820,6 +5967,7 @@ class TableImageExtractor:
         上两行空格：有非零证据 → 多档 Y 按列 OCR；认不到就留空。
         禁止抄另一行（电力≠可编造的计划）。真·全 0/空行才允许先验补 0。
         已有非空格绝不因 nodata skip 清掉（未出清最终由 force_uncleared 统一处理）。
+        Y 只在本带中心与略偏上试，禁止下扫进电价行（宁空勿串）。
         """
         skip = nodata_cols or set()
         ncols = len(col_centers)
@@ -5834,7 +5982,8 @@ class TableImageExtractor:
             if not empty_before:
                 return out
             h_med = max(12.0, abs(y1 - y0) * 0.9, 16.0)
-            y_tries = [yc, yc - h_med * 0.55, yc + h_med * 0.55, yc - h_med * 1.1]
+            # 不下扫：yc+ 会读到第三行电价（如 273.25 补进第二行）
+            y_tries = [yc, yc - h_med * 0.55, yc - h_med * 1.1]
             result = list(out)
             still_empty = set(empty_before)
             for try_yc in y_tries:
@@ -5861,7 +6010,7 @@ class TableImageExtractor:
                     raw = filled[i] if i < len(filled) else ""
                     got = str(raw or "").strip()
                     if not self._accept_upper_ocr_token(
-                        got, price_row=price_row, col=i
+                        got, price_row=price_row, col=i, row=result
                     ):
                         continue
                     result[i] = got
@@ -6377,15 +6526,15 @@ class TableImageExtractor:
         self, matrix: List[List[str]]
     ) -> List[List[str]]:
         """
-        硬约束：电价末行禁止占位 0、禁止与上方同行同列串值。
+        硬约束：电价末行禁止占位 0；与上方同列串值时按形态决定清哪边。
 
-        - 裸 0 / 无点整数 → 置空（不入库）
-        - 与上方任一数据行同列相同 → 串行渗漏，置空
-        带点小数保留。
+        - 裸 0 / 无点整数 → 末行置空（不入库）
+        - 同列同值且像电价小数 → 清上方、保留末行（禁止第三行补第二行）
+        - 同列同值且像整型功率 → 清末行、保留上方
         """
         if not matrix or len(matrix) < 1:
             return matrix
-        out = [list(r) for r in matrix]
+        out = self._scrub_price_tokens_from_upper_cells([list(r) for r in matrix])
         last = out[-1]
         uppers = out[:-1]
         for ci in range(len(last)):
@@ -6396,22 +6545,28 @@ class TableImageExtractor:
             if self._is_price_placeholder_token(s):
                 last[ci] = ""
                 continue
-            # 与上方同列同值 → 串行（含带点误抄，极少见但也清）
-            for upper in uppers:
+            for ui, upper in enumerate(uppers):
                 if ci >= len(upper):
                     continue
                 u = str(upper[ci] or "").strip()
                 if not u:
                     continue
-                if s == u:
+                same = s == u
+                if not same:
+                    try:
+                        same = abs(float(s) - float(u)) <= 1e-9
+                    except ValueError:
+                        same = False
+                if not same:
+                    continue
+                # 电价样：清上方；整型样：清末行。宁空勿串。
+                if self._looks_like_price_decimal_token(s) or self._looks_like_price_decimal_token(
+                    u
+                ):
+                    out[ui][ci] = ""
+                else:
                     last[ci] = ""
-                    break
-                try:
-                    if abs(float(s) - float(u)) <= 1e-9:
-                        last[ci] = ""
-                        break
-                except ValueError:
-                    pass
+                break
         out[-1] = last
         return out
 
@@ -7080,7 +7235,7 @@ class TableImageExtractor:
                     img, row, col_centers, band, img_w, tail=4
                 )
                 continue
-            out[ri] = self._ocr_fill_empty_cells(
+            filled = self._ocr_fill_empty_cells(
                 img,
                 row,
                 col_centers,
@@ -7090,6 +7245,20 @@ class TableImageExtractor:
                 trust_cell_ocr=is_price_row and empty_n >= max(2, int(len(row) * 0.5)),
                 skip_cols=nodata_cols,
             )
+            # 上两行：空格补识若扫到电价样小数 → 拒收留空（宁空勿串行）
+            if not is_price_row and self._row_is_integerish_or_empty(row):
+                price_row = out[-1] if out else None
+                for ci, (before, after) in enumerate(zip(row, filled)):
+                    if str(before or "").strip() or not str(after or "").strip():
+                        continue
+                    if not self._accept_upper_ocr_token(
+                        str(after).strip(),
+                        price_row=price_row,
+                        col=ci,
+                        row=row,
+                    ):
+                        filled[ci] = ""
+            out[ri] = filled
             # 电价补识若抄成上方功率行，置空留给后续外推重试
             if is_price_row and self._price_row_echoes_upper(out):
                 out[ri] = [

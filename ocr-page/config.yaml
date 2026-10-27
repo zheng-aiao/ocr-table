@@ -61,14 +61,19 @@ ocr:
   min_points: 6
   # 表格：仅 auto（cameras.*.table_search）；失败本轮结束，等下一抓拍
   # 弹窗蒙板压暗 → dimmed_modal 快速失败（不提亮硬识）
+  # 显示器黑框 OSD → black_osd 快速失败（不硬识被挡表）
   parallel_sides: true
   onnx_threads: 2
   # 本分支不识别画面日期，业务日固定为电脑系统日（年月日）
-  # 中间产物：YYYYMMDD/double/YYYYMMDD_HHMMSS_mmm/{left|right}/（按日分区，同 captures）
+  # 中间产物：YYYYMMDD/YYYYMMDD_HHMMSS_mmm/（按日分区，同 captures；双摄下含 left|right）
   artifacts_dir: "data/ocr_runs"
   fix_decimal:
     enabled: true
     ratio_k: 3.0
+  # 跨轮众数：已公布时段（本机时间≥表头）累计候选值，写 PI 取次数最多者；预测段不计票
+  vote:
+    enabled: true
+    dir: "data/vote_tallies"
 
 excel:
   enabled: false

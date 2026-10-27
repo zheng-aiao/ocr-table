@@ -397,6 +397,33 @@ def get_pi_value_max(cfg: Optional[Dict[str, Any]] = None) -> Optional[float]:
     return v
 
 
+def get_vote_cfg(cfg: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """
+    跨轮众数计票：ocr.vote。
+    enabled 默认 True；dir 默认 data/vote_tallies。
+    """
+    cfg = cfg or get_config()
+    ocr = cfg.get("ocr") or {}
+    raw = ocr.get("vote")
+    if not isinstance(raw, dict):
+        raw = {}
+    enabled = raw.get("enabled", True)
+    if isinstance(enabled, str):
+        enabled = enabled.strip().lower() not in ("0", "false", "no", "off")
+    return {
+        "enabled": bool(enabled),
+        "dir": str(raw.get("dir") or "data/vote_tallies"),
+    }
+
+
+def resolve_vote_tallies_dir(cfg: Optional[Dict[str, Any]] = None) -> Path:
+    """众数票箱目录（按日 JSON）。"""
+    vote = get_vote_cfg(cfg)
+    p = resolve_project_path(vote.get("dir") or "data/vote_tallies")
+    p.mkdir(parents=True, exist_ok=True)
+    return p
+
+
 def get_pi_date_back_days(cfg: Optional[Dict[str, Any]] = None) -> int:
     """OCR 识别日相对写 PI 日期提前的天数：1=提前一天，0=当天不提前。"""
     cfg = cfg or get_config()
@@ -660,20 +687,21 @@ def new_ocr_run_dir(
 ) -> Path:
     """
     新建一次 OCR 会话目录（始终落盘过程中间文件；按日分区，与 captures 一致）：
-      data/ocr_runs/YYYYMMDD/single/YYYYMMDD_HHMMSS_mmm/
-      data/ocr_runs/YYYYMMDD/dual/YYYYMMDD_HHMMSS_mmm/      # 双屏拼缝
-      data/ocr_runs/YYYYMMDD/double/YYYYMMDD_HHMMSS_mmm/    # 双摄；下含 left/ right/
+      data/ocr_runs/YYYYMMDD/YYYYMMDD_HHMMSS_mmm/
+    mode 仅用于履历 id 前缀（single_/dual_/double_），不再参与目录层级。
+    双摄会话目录下另含 left/ right/。
     """
     from datetime import datetime
     import uuid
 
-    m = normalize_ocr_artifacts_mode(mode)
+    # mode 保留入参以兼容调用方；目录不再按 mode 分子路径
+    _ = normalize_ocr_artifacts_mode(mode)
     root = resolve_ocr_artifacts_root(cfg)
     now = datetime.now()
     day = now.strftime("%Y%m%d")
     stamp = now.strftime("%Y%m%d_%H%M%S_%f")[:-3]
-    out = root / day / m / stamp
+    out = root / day / stamp
     if out.exists():
-        out = root / day / m / f"{stamp}_{uuid.uuid4().hex[:6]}"
+        out = root / day / f"{stamp}_{uuid.uuid4().hex[:6]}"
     out.mkdir(parents=True, exist_ok=True)
     return out

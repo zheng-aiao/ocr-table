@@ -1105,7 +1105,9 @@
           || (sideObj.ocr || {}).table_crop_fallback_reason
           || ""
         );
-        const mark = reason === "dimmed_modal" ? "蒙板压暗失败" : "表格区域告警";
+        const mark = reason === "dimmed_modal"
+          ? "蒙板压暗失败"
+          : (reason === "black_osd" ? "黑框OSD跳过" : "表格区域告警");
         return base + ' <span class="crop-fb">· ' + mark + '</span>';
       };
       const elLab = (id, html) => {

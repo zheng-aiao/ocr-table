@@ -1,0 +1,603 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>珙县 · 纠正 PI 值</title>
+  <style>
+    :root {
+      --bg: #0e151c;
+      --panel: #162028;
+      --text: #e8eef4;
+      --muted: #8a9aab;
+      --line: #2a3846;
+      --accent: #2f7fd1;
+      --ok: #2fad6e;
+      --err: #d45b63;
+      --warn: #c9a227;
+      --edit: #1e3a55;
+      --dirty: #3a2f18;
+      --page-max: min(1680px, calc(100vw - 24px));
+    }
+    * { box-sizing: border-box; }
+    html, body { height: 100%; }
+    body {
+      margin: 0;
+      font-family: "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+      background:
+        radial-gradient(900px 420px at 0% 0%, #1a2c3d 0%, transparent 55%),
+        var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+    header {
+      width: var(--page-max);
+      max-width: 100%;
+      margin: 0 auto;
+      padding: 14px 16px 8px;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px 16px;
+      align-items: flex-end;
+      justify-content: space-between;
+      flex-shrink: 0;
+    }
+    header h1 {
+      margin: 0;
+      font-size: 1.35rem;
+      font-weight: 700;
+      letter-spacing: 0.02em;
+    }
+    header p {
+      margin: 4px 0 0;
+      color: var(--muted);
+      font-size: 0.82rem;
+    }
+    header a {
+      color: var(--accent);
+      text-decoration: none;
+      font-weight: 600;
+      font-size: 0.88rem;
+    }
+    header a:hover { text-decoration: underline; }
+    main {
+      width: var(--page-max);
+      max-width: 100%;
+      margin: 0 auto;
+      padding: 4px 16px 20px;
+      flex: 1;
+      min-height: 0;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+    .toolbar {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      align-items: flex-end;
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      padding: 12px 14px;
+      flex-shrink: 0;
+    }
+    .toolbar label {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      font-size: 0.78rem;
+      color: var(--muted);
+    }
+    .toolbar input,
+    .toolbar select {
+      background: #0b1116;
+      border: 1px solid var(--line);
+      color: var(--text);
+      border-radius: 8px;
+      padding: 7px 10px;
+      font-size: 0.9rem;
+      min-width: 180px;
+    }
+    .toolbar select { min-width: 140px; }
+    button {
+      border: 0;
+      border-radius: 8px;
+      padding: 8px 14px;
+      font-size: 0.88rem;
+      font-weight: 600;
+      cursor: pointer;
+      background: var(--accent);
+      color: #fff;
+    }
+    button:hover { filter: brightness(1.08); }
+    button:disabled {
+      opacity: 0.55;
+      cursor: not-allowed;
+      filter: none;
+    }
+    button.secondary {
+      background: #243040;
+      border: 1px solid var(--line);
+      color: var(--text);
+    }
+    button.warn {
+      background: #a67c1a;
+    }
+    .msg {
+      font-size: 0.84rem;
+      color: var(--muted);
+      min-height: 1.2em;
+      flex: 1 1 200px;
+    }
+    .msg.ok { color: var(--ok); }
+    .msg.err { color: var(--err); }
+    .msg.warn { color: var(--warn); }
+    .table-panel {
+      flex: 1;
+      min-height: 0;
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+    }
+    .table-wrap {
+      flex: 1;
+      overflow: auto;
+      min-height: 240px;
+    }
+    table.matrix {
+      border-collapse: separate;
+      border-spacing: 0;
+      font-size: 0.78rem;
+      min-width: 100%;
+    }
+    table.matrix th,
+    table.matrix td {
+      border-right: 1px solid var(--line);
+      border-bottom: 1px solid var(--line);
+      padding: 4px 6px;
+      white-space: nowrap;
+      text-align: center;
+      min-width: 54px;
+      height: 30px;
+    }
+    table.matrix thead th {
+      position: sticky;
+      top: 0;
+      z-index: 2;
+      background: #1a2834;
+      color: var(--muted);
+      font-weight: 650;
+      font-size: 0.72rem;
+    }
+    table.matrix th.row-head,
+    table.matrix td.row-head {
+      position: sticky;
+      left: 0;
+      z-index: 3;
+      background: #1a2834;
+      text-align: left;
+      min-width: 140px;
+      max-width: 200px;
+      font-weight: 650;
+      color: var(--text);
+      padding-left: 10px;
+    }
+    table.matrix thead th.row-head { z-index: 4; }
+    table.matrix td.cell {
+      background: #121a22;
+      color: var(--text);
+      cursor: default;
+      user-select: none;
+    }
+    table.matrix td.cell.empty { color: var(--muted); opacity: 0.7; }
+    table.matrix td.cell.dirty {
+      background: var(--dirty);
+      box-shadow: inset 0 0 0 1px rgba(201, 162, 39, 0.45);
+    }
+    table.matrix td.cell.editing {
+      padding: 0;
+      background: var(--edit);
+    }
+    table.matrix td.cell input {
+      width: 100%;
+      height: 100%;
+      min-height: 28px;
+      border: 0;
+      outline: 2px solid var(--accent);
+      background: #0b1116;
+      color: var(--text);
+      text-align: center;
+      font-size: 0.78rem;
+      font-family: inherit;
+      padding: 2px 4px;
+    }
+    .legend {
+      padding: 8px 12px;
+      font-size: 0.78rem;
+      color: var(--muted);
+      border-top: 1px solid var(--line);
+      flex-shrink: 0;
+    }
+    .legend strong { color: var(--warn); font-weight: 650; }
+  </style>
+</head>
+<body>
+  <header>
+    <div>
+      <h1>纠正 PI 值</h1>
+      <p>时间框选系统日（与 OCR 业务日一致）；读写库日 = 系统日 − pi_date_back_days。双击单元格编辑，失焦恢复只读。</p>
+    </div>
+    <a href="/">← 返回履历</a>
+  </header>
+  <main>
+    <div class="toolbar">
+      <label>系统时间
+        <input type="datetime-local" id="dayInput" step="60" />
+      </label>
+      <label>机组
+        <select id="sideSelect">
+          <option value="left">左 · left</option>
+          <option value="right">右 · right</option>
+        </select>
+      </label>
+      <button type="button" id="btnQuery">查询</button>
+      <button type="button" class="warn" id="btnWrite" disabled>写回</button>
+      <div class="msg" id="msg">选择时间后点击查询。</div>
+    </div>
+    <div class="table-panel">
+      <div class="table-wrap" id="tableWrap">
+        <table class="matrix" id="matrix">
+          <thead></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+      <div class="legend" id="legend">尚未查询。</div>
+    </div>
+  </main>
+  <script>
+    const $ = (id) => document.getElementById(id);
+    const state = {
+      day: null,       // 系统日（入参）
+      piDay: null,     // 写库日 = 系统日 − pi_date_back_days
+      backDays: null,
+      side: "left",
+      tagPrefix: "",
+      headers: [],
+      rowTags: [],
+      values: [],   // string|null display values
+      baseline: [], // original string from PI
+      dirty: new Set(), // "r,c"
+    };
+
+    function pad2(n) { return String(n).padStart(2, "0"); }
+
+    function nowLocalInputValue() {
+      const d = new Date();
+      return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}T${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
+    }
+
+    function dayFromInput() {
+      const raw = ($("dayInput").value || "").trim();
+      if (!raw) return "";
+      return raw.slice(0, 10);
+    }
+
+    function defaultHeaders() {
+      const hs = [];
+      for (let i = 1; i <= 96; i++) {
+        const total = i * 15;
+        if (total >= 24 * 60) hs.push("24:00");
+        else hs.push(`${pad2(Math.floor(total / 60))}:${pad2(total % 60)}`);
+      }
+      return hs;
+    }
+
+    function fmtCell(v) {
+      if (v === null || v === undefined || v === "") return "";
+      const n = Number(v);
+      if (!Number.isFinite(n)) return String(v);
+      // PI 为 float32，回读常带毛刺（279.76001）。电价最多 3 位：
+      // 先 round(3) 清毛刺，再去尾零 → 真 2 位仍显示 2 位，真 3 位仍显示 3 位。
+      let s = (Math.round(n * 1000) / 1000).toFixed(3);
+      if (s === "-0.000") s = "0.000";
+      return s.replace(/0+$/, "").replace(/\.$/, "");
+    }
+
+    function setMsg(text, kind) {
+      const el = $("msg");
+      el.textContent = text || "";
+      el.className = "msg" + (kind ? " " + kind : "");
+    }
+
+    function dirtyKey(r, c) { return `${r},${c}`; }
+
+    function markDirty(r, c, cur) {
+      const base = (state.baseline[r] && state.baseline[r][c]) || "";
+      const key = dirtyKey(r, c);
+      if (String(cur) !== String(base)) state.dirty.add(key);
+      else state.dirty.delete(key);
+      $("btnWrite").disabled = state.dirty.size === 0;
+    }
+
+    function renderEmptySkeleton() {
+      state.headers = defaultHeaders();
+      state.rowTags = [".01", ".02", ".03"];
+      state.values = [[], [], []].map(() => state.headers.map(() => null));
+      state.baseline = state.values.map((row) => row.slice());
+      state.dirty.clear();
+      $("btnWrite").disabled = true;
+      paintTable();
+      $("legend").textContent = "尚未查询。时间框为系统日；实际读写库日按 pi_date_back_days 回退。";
+    }
+
+    function paintTable() {
+      const thead = $("matrix").querySelector("thead");
+      const tbody = $("matrix").querySelector("tbody");
+      thead.innerHTML = "";
+      tbody.innerHTML = "";
+
+      const hr = document.createElement("tr");
+      const corner = document.createElement("th");
+      corner.className = "row-head";
+      corner.textContent = "测点";
+      hr.appendChild(corner);
+      state.headers.forEach((h) => {
+        const th = document.createElement("th");
+        th.textContent = h;
+        hr.appendChild(th);
+      });
+      thead.appendChild(hr);
+
+      state.rowTags.forEach((tag, ri) => {
+        const tr = document.createElement("tr");
+        const rh = document.createElement("td");
+        rh.className = "row-head";
+        rh.textContent = tag;
+        rh.title = tag;
+        tr.appendChild(rh);
+        const row = state.values[ri] || [];
+        state.headers.forEach((_, ci) => {
+          const td = document.createElement("td");
+          td.className = "cell";
+          td.dataset.row = String(ri);
+          td.dataset.col = String(ci);
+          const text = fmtCell(row[ci]);
+          if (!text) td.classList.add("empty");
+          if (state.dirty.has(dirtyKey(ri, ci))) td.classList.add("dirty");
+          td.textContent = text || "—";
+          tr.appendChild(td);
+        });
+        tbody.appendChild(tr);
+      });
+    }
+
+    function exitEdit(td, commit) {
+      if (!td || !td.classList.contains("editing")) return;
+      const input = td.querySelector("input");
+      const ri = Number(td.dataset.row);
+      const ci = Number(td.dataset.col);
+      let next = "";
+      if (commit && input) {
+        const raw = String(input.value || "").trim();
+        if (raw === "") {
+          next = "";
+        } else if (!Number.isFinite(Number(raw))) {
+          setMsg("请输入有效数字", "warn");
+          next = (state.values[ri] && state.values[ri][ci] != null)
+            ? fmtCell(state.values[ri][ci])
+            : "";
+        } else {
+          next = fmtCell(Number(raw));
+        }
+      } else {
+        next = (state.values[ri] && state.values[ri][ci] != null)
+          ? fmtCell(state.values[ri][ci])
+          : "";
+      }
+      if (!state.values[ri]) state.values[ri] = [];
+      state.values[ri][ci] = next === "" ? null : next;
+      markDirty(ri, ci, next);
+      td.classList.remove("editing");
+      td.classList.toggle("empty", next === "");
+      td.classList.toggle("dirty", state.dirty.has(dirtyKey(ri, ci)));
+      td.textContent = next || "—";
+    }
+
+    function enterEdit(td) {
+      if (!td || !td.classList.contains("cell") || td.classList.contains("editing")) return;
+      // 先关掉其它编辑格
+      document.querySelectorAll("td.cell.editing").forEach((el) => exitEdit(el, true));
+      const ri = Number(td.dataset.row);
+      const ci = Number(td.dataset.col);
+      const cur = (state.values[ri] && state.values[ri][ci] != null)
+        ? fmtCell(state.values[ri][ci])
+        : "";
+      td.classList.add("editing");
+      td.classList.remove("empty");
+      td.textContent = "";
+      const input = document.createElement("input");
+      input.type = "text";
+      input.inputMode = "decimal";
+      input.value = cur;
+      input.addEventListener("keydown", (ev) => {
+        if (ev.key === "Enter") {
+          ev.preventDefault();
+          input.blur();
+        } else if (ev.key === "Escape") {
+          ev.preventDefault();
+          exitEdit(td, false);
+        }
+      });
+      input.addEventListener("blur", () => exitEdit(td, true));
+      td.appendChild(input);
+      input.focus();
+      input.select();
+    }
+
+    $("matrix").addEventListener("dblclick", (ev) => {
+      const td = ev.target.closest("td.cell");
+      if (td) enterEdit(td);
+    });
+
+    // 点表格外失焦：浏览器原生 blur 已处理；点其它单元格只读区时若仍在编辑，靠 blur
+    document.addEventListener("mousedown", (ev) => {
+      const editing = document.querySelector("td.cell.editing");
+      if (!editing) return;
+      if (editing.contains(ev.target)) return;
+      // 让 input 失焦即可
+      const input = editing.querySelector("input");
+      if (input) input.blur();
+    });
+
+    async function loadCameras() {
+      try {
+        const res = await fetch("/api/config/pi");
+        const data = await res.json();
+        const cams = data.cameras || {};
+        const sel = $("sideSelect");
+        sel.innerHTML = "";
+        ["left", "right"].forEach((side) => {
+          const c = cams[side] || {};
+          const opt = document.createElement("option");
+          opt.value = side;
+          const title = side === "left" ? "左" : "右";
+          opt.textContent = `${title} · ${c.tag || side}`;
+          sel.appendChild(opt);
+        });
+      } catch (_) {
+        /* 保持默认 */
+      }
+    }
+
+    async function doQuery() {
+      const day = dayFromInput();
+      if (!day) {
+        setMsg("请先选择系统时间", "warn");
+        return;
+      }
+      const side = $("sideSelect").value || "left";
+      $("btnQuery").disabled = true;
+      $("btnWrite").disabled = true;
+      setMsg("查询中…");
+      try {
+        const qs = new URLSearchParams({ day, side });
+        const res = await fetch("/api/pi/matrix?" + qs.toString());
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data.detail || data.message || res.statusText);
+        state.day = data.day;
+        state.piDay = data.pi_day || data.day;
+        state.backDays = data.pi_date_back_days;
+        state.side = data.side;
+        state.tagPrefix = data.tag_prefix || "";
+        state.headers = data.headers || defaultHeaders();
+        state.rowTags = data.row_tags || [];
+        state.values = (data.rows || []).map((row) =>
+          (row || []).map((v) => (v === null || v === undefined ? null : fmtCell(v)))
+        );
+        state.baseline = state.values.map((row) => row.map((v) => (v == null ? "" : String(v))));
+        state.dirty.clear();
+        paintTable();
+        const filled = (data.filled || []).join("/");
+        const backTip = (data.pi_date_back_days != null)
+          ? `系统日 ${data.day} − ${data.pi_date_back_days} 天 → 写库日 ${data.pi_day}`
+          : `系统日 ${data.day}`;
+        $("legend").textContent =
+          `${backTip} · 前缀 ${data.tag_prefix} · 已填格 ${filled} · 范围 ${data.start} ~ ${data.end}`;
+        setMsg(`查询成功（写库日 ${state.piDay}），${state.rowTags.length} 行 × ${state.headers.length} 列`, "ok");
+      } catch (e) {
+        setMsg("查询失败：" + (e.message || e), "err");
+      } finally {
+        $("btnQuery").disabled = false;
+        $("btnWrite").disabled = state.dirty.size === 0;
+      }
+    }
+
+    async function doWrite() {
+      document.querySelectorAll("td.cell.editing").forEach((el) => exitEdit(el, true));
+      if (!state.day) {
+        setMsg("请先查询再写回", "warn");
+        return;
+      }
+      if (state.dirty.size === 0) {
+        setMsg("没有修改过的单元格", "warn");
+        return;
+      }
+      const changes = [];
+      state.dirty.forEach((key) => {
+        const [rs, cs] = key.split(",");
+        const ri = Number(rs);
+        const ci = Number(cs);
+        const raw = state.values[ri] && state.values[ri][ci];
+        if (raw === null || raw === undefined || raw === "") return;
+        const num = Number(raw);
+        if (!Number.isFinite(num)) return;
+        changes.push({ row: ri, col: ci, value: num });
+      });
+      if (!changes.length) {
+        setMsg("改动格均为空，无法写回（清空请在 PI 侧另行处理）", "warn");
+        return;
+      }
+      const piTip = state.piDay
+        ? `（写库日 ${state.piDay}${state.backDays != null ? ` = 系统日 − ${state.backDays}` : ""}）`
+        : "";
+      if (!confirm(`确认将 ${changes.length} 个改动格写回 PI${piTip}？`)) return;
+      $("btnWrite").disabled = true;
+      $("btnQuery").disabled = true;
+      setMsg("写回中…");
+      try {
+        const res = await fetch("/api/pi/matrix", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            day: state.day,
+            side: state.side,
+            changes,
+          }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data.detail || data.message || res.statusText);
+        const written = data.written ?? 0;
+        const total = data.total ?? changes.length;
+        if (data.ok) {
+          // 成功后把 baseline 对齐，清 dirty
+          state.dirty.forEach((key) => {
+            const [rs, cs] = key.split(",");
+            const ri = Number(rs);
+            const ci = Number(cs);
+            if (!state.baseline[ri]) state.baseline[ri] = [];
+            state.baseline[ri][ci] = state.values[ri][ci] == null ? "" : String(state.values[ri][ci]);
+          });
+          state.dirty.clear();
+          paintTable();
+          setMsg(`写回成功 ${written}/${total}`, "ok");
+        } else {
+          setMsg(`写回部分失败 ${written}/${total}` + (data.message ? " · " + data.message : ""), "err");
+          $("btnWrite").disabled = false;
+        }
+      } catch (e) {
+        setMsg("写回失败：" + (e.message || e), "err");
+        $("btnWrite").disabled = state.dirty.size === 0;
+      } finally {
+        $("btnQuery").disabled = false;
+      }
+    }
+
+    $("btnQuery").addEventListener("click", doQuery);
+    $("btnWrite").addEventListener("click", doWrite);
+    $("dayInput").addEventListener("keydown", (ev) => {
+      if (ev.key === "Enter") doQuery();
+    });
+
+    $("dayInput").value = nowLocalInputValue();
+    loadCameras().then(() => {
+      renderEmptySkeleton();
+    });
+  </script>
+</body>
+</html>

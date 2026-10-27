@@ -115,25 +115,54 @@ def _iter_run_json_files(day: Optional[str] = None) -> List[Path]:
     return files
 
 
+def _run_id_variants(run_id: str) -> List[str]:
+    """履历 id 候选：新为纯 stamp；旧为 mode_stamp。"""
+    rid = str(run_id or "").strip()
+    if not rid:
+        return []
+    out: List[str] = [rid]
+    stamp = rid
+    for mode in ("single", "dual", "double"):
+        prefix = f"{mode}_"
+        if rid.startswith(prefix):
+            stamp = rid[len(prefix) :]
+            if stamp and stamp not in out:
+                out.append(stamp)
+            break
+    else:
+        # 新 id 无 mode 前缀：兼容查找旧 mode_stamp 文件
+        for mode in ("single", "dual", "double"):
+            alt = f"{mode}_{rid}"
+            if alt not in out:
+                out.append(alt)
+    return out
+
+
 def _find_run_json_path(run_id: str) -> Optional[Path]:
-    """定位履历文件：优先日目录，其次根目录扁平旧布局。"""
-    day = _day_from_stamp(run_id)
-    candidates: List[Path] = []
-    if day:
-        candidates.append(RUNS_DIR / day / f"{run_id}.json")
-    candidates.append(RUNS_DIR / f"{run_id}.json")
-    for p in candidates:
-        if p.is_file():
-            return p
-    # 兜底：日目录名与 stamp 前缀不一致时（极少）扫一遍
-    for f in RUNS_DIR.glob(f"*/{run_id}.json"):
-        if f.is_file():
-            return f
+    """定位履历文件：优先日目录，其次根目录扁平旧布局；兼容旧 mode_ 前缀文件名。"""
+    for rid in _run_id_variants(run_id):
+        day = _day_from_stamp(rid)
+        candidates: List[Path] = []
+        if day:
+            candidates.append(RUNS_DIR / day / f"{rid}.json")
+        candidates.append(RUNS_DIR / f"{rid}.json")
+        for p in candidates:
+            if p.is_file():
+                return p
+        for f in RUNS_DIR.glob(f"*/{rid}.json"):
+            if f.is_file():
+                return f
     return None
 
 
 def _artifacts_bucket_from_dir(artifacts_dir: Optional[str | Path]) -> Optional[str]:
-    """从 ocr_runs[/YYYYMMDD]/<bucket>/<stamp> 解析 bucket（single|dual|double）。"""
+    """从产物目录解析 bucket（single|dual|double）。
+
+    兼容：
+      ocr_runs/YYYYMMDD/stamp              → 无 bucket，返回 None（由调用方 mode 决定）
+      ocr_runs/YYYYMMDD/<bucket>/stamp     → 旧按日+mode
+      ocr_runs/<bucket>/stamp              → 更旧扁平
+    """
     if not artifacts_dir:
         return None
     try:
@@ -146,7 +175,11 @@ def _artifacts_bucket_from_dir(artifacts_dir: Optional[str | Path]) -> Optional[
 
 
 def _ocr_run_json_candidates(run_id: str) -> List[Path]:
-    """ocr_runs 内 run.json 候选路径（新：日/bucket/stamp；旧：bucket/stamp）。"""
+    """ocr_runs 内 run.json 候选路径。
+
+    优先新布局 ocr_runs/YYYYMMDD/stamp；
+    兼容旧：ocr_runs/YYYYMMDD/<bucket>/stamp、ocr_runs/<bucket>/stamp。
+    """
     root = resolve_ocr_artifacts_root()
     stamp = run_id
     buckets: Tuple[str, ...] = ("single", "dual", "double")
@@ -163,6 +196,8 @@ def _ocr_run_json_candidates(run_id: str) -> List[Path]:
             break
     day = _day_from_stamp(stamp)
     out: List[Path] = []
+    if day:
+        out.append(root / day / stamp / "run.json")
     for mode in buckets:
         if day:
             out.append(root / day / mode / stamp / "run.json")
@@ -170,13 +205,14 @@ def _ocr_run_json_candidates(run_id: str) -> List[Path]:
     return out
 
 
-def _run_id(mode: str, artifacts_dir: Optional[str] = None) -> str:
-    m = _artifacts_bucket_from_dir(artifacts_dir) or normalize_ocr_artifacts_mode(mode)
+def _run_id(mode: str = "single", artifacts_dir: Optional[str] = None) -> str:
+    """履历 id = 时间戳 YYYYMMDD_HHMMSS_mmm（不再带 single_/dual_/double_ 前缀）。"""
+    _ = mode  # 保留入参兼容调用方；mode 写在 record.mode，不进 id
     if artifacts_dir:
         name = Path(artifacts_dir).name
         if name:
-            return f"{m}_{name}"
-    return f"{m}_{_now_stamp()}"
+            return name
+    return _now_stamp()
 
 
 def _candidates_for_ui(ocr: Optional[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -961,6 +997,9 @@ def build_run_record(
         "total_ms": (result.get("timing") or {}).get("total_ms"),
         "capture_ms": (result.get("timing") or {}).get("capture_ms"),
         "pi_ms": (result.get("timing") or {}).get("pi_ms"),
+        "vote": result.get("vote")
+        if isinstance(result.get("vote"), dict)
+        else {"enabled": False, "slots": {}},
     }
     mon_path, mon_url = _resolve_monitor_image(result, artifacts_dir)
     record["monitor_path"] = mon_path
@@ -1495,7 +1534,14 @@ def rewrite_run_pi(run_id: str) -> Dict[str, Any]:
         }
     points = collect_run_points(data)
     try:
-        write = write_points_to_pi(points, tag=None)
+        from .vote_store import apply_majority_votes
+
+        # 补写不再重复计票，仅按现有票箱取众数胜出值
+        write_points, vote_meta = apply_majority_votes(points, record=False)
+        write = write_points_to_pi(write_points, tag=None)
+        if isinstance(data.get("vote"), dict) or vote_meta.get("enabled"):
+            data["vote"] = vote_meta
+            save_run_record(data)
     except Exception as e:
         logger.exception("补写 PI 失败: %s", run_id)
         return apply_pi_write_result(
@@ -1552,8 +1598,7 @@ def get_run(run_id: str) -> Optional[Dict[str, Any]]:
     path = _find_run_json_path(run_id)
     data: Optional[Dict[str, Any]] = None
     if path is None:
-        # 兼容：从 ocr_runs 里找 run.json
-        # id 形如 single_/dual_/double_ + YYYYMMDD_HHMMSS_mmm
+        # 兼容：从 ocr_runs 里找 run.json（新 id 为 stamp；旧 id 带 mode_）
         for cand in _ocr_run_json_candidates(run_id):
             if cand.is_file():
                 try:

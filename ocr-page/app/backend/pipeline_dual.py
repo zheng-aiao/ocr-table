@@ -44,6 +44,7 @@ from .pipeline import (
     resolve_ocr_fail_fields,
     write_points_to_pi,
 )
+from .vote_store import apply_majority_votes
 
 logger = logging.getLogger(__name__)
 
@@ -505,6 +506,8 @@ def ocr_side_images(
         # 两侧同为蒙板/表格失败时，顶层 reason 用更具体的码，便于列表筛选
         if left_reason == right_reason and left_reason:
             out["reason"] = left_reason
+        elif "black_osd" in (left_reason, right_reason):
+            out["reason"] = "black_osd"
         elif "dimmed_modal" in (left_reason, right_reason):
             out["reason"] = "dimmed_modal"
         else:
@@ -516,6 +519,22 @@ def ocr_side_images(
                 f"左右屏有效点数均低于 min_points={min_points} 或抓拍失败，本轮不写 PI"
             )
         )
+
+    # 众数计票：质量门已过的点才进入；展示仍用 OCR 原值（sides/points），写库用众数胜出
+    # 仅正式写 PI 时记票，避免联调 OCR-only 污染票箱
+    vote_meta: Dict[str, Any] = {"enabled": False, "slots": {}}
+    if write_points:
+        write_points, vote_meta = apply_majority_votes(
+            write_points, record=bool(write_pi), cfg=cfg
+        )
+        logger.info(
+            "众数计票 record=%s past=%s forecast=%s slots=%s",
+            bool(write_pi),
+            vote_meta.get("past"),
+            vote_meta.get("forecast"),
+            len(vote_meta.get("slots") or {}),
+        )
+    out["vote"] = vote_meta
 
     if write_pi:
         if write_points:
